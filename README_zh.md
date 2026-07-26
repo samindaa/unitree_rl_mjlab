@@ -21,7 +21,7 @@ Mjlab 结合了 [Isaac Lab](https://github.com/isaac-sim/IsaacLab) 的成熟高�
 
 ## 📦 安装配置
 
-安装和配置步骤请参考 [setup.md](doc/setup_zh.md)
+安装和配置步骤请参考 [setup_en.md](doc/setup_en.md)
 
 
 ## 🔁 流程概览

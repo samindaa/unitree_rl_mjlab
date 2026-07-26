@@ -34,8 +34,11 @@ git clone https://github.com/unitreerobotics/unitree_rl_mjlab.git
 ### 2.2 System Dependencies
 
 ```bash
-sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev libfmt-dev
+sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev libfmt-dev libglfw3-dev
 ```
+
+`libglfw3-dev` is required to build the MuJoCo simulator in [`simulate/`](../simulate);
+without it the build fails with `fatal error: GLFW/glfw3.h: No such file or directory`.
 
 ### 2.3 Python Dependencies
 

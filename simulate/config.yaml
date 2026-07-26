@@ -13,10 +13,28 @@ domain_id: 0  # Domain id
 interface: "lo" # Interface
 
 use_joystick: 1 # Simulate Unitree WirelessController using a gamepad
-joystick_type: "xbox" # support "xbox" and "switch" gamepad layout
-joystick_device: "/dev/input/js0" # Device path
+joystick_type: "keyboard" # support "xbox" and "switch" gamepad layout, or "keyboard" (no hardware)
+joystick_device: "/dev/input/js0" # Device path; unused by "keyboard"
 joystick_bits: 16 # Some game controllers may only have 8-bit accuracy
+
+# --- joystick_type: "keyboard" ---------------------------------------------
+# Type these keys in *this* terminal to drive the controller FSM. A terminal
+# reports one key at a time, so each FSM transition chord is bound to a single
+# key; pressing it asserts the whole chord for keyboard_press_duration seconds.
+# Button names match the `transitions` expressions in the controller's
+# config.yaml (L1/L2/R1/R2 are accepted as aliases for LB/LT/RB/RT).
+keyboard_map:
+  "1": "LT + up"  # Passive  -> FixStand
+  "2": "RT + A"   # FixStand -> Velocity  (also Mimic -> Velocity)
+  "3": "RB + A"   # Velocity -> Mimic
+  "0": "LT + B"   # any      -> Passive (damping)
+keyboard_press_duration: 0.3 # Seconds a chord stays asserted after a key press
+keyboard_axis_step: 0.1 # Velocity command increment per w/a/s/d/q/e press
+# LT/RT arrive as Axis values and are low-pass filtered by the controller, so they
+# are asserted this many seconds before the rest of the chord (~23 ms is the minimum
+# for them to cross the press threshold; a human holds L2 before tapping Up).
+keyboard_trigger_lead: 0.15
 
 print_scene_information: 1 # Print link, joint and sensors information of robot
 
-enable_elastic_band: 0 # Virtual spring band, used for lifting h1
+enable_elastic_band: 1 # Virtual spring band, used for lifting h1

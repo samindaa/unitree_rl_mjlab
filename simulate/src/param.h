@@ -4,6 +4,8 @@
 #include <boost/program_options.hpp>
 #include <yaml-cpp/yaml.h>
 #include <filesystem>
+#include <map>
+#include <string>
 
 namespace param
 {
@@ -20,6 +22,12 @@ inline struct SimulationConfig
     std::string joystick_type;
     std::string joystick_device;
     int joystick_bits;
+
+    // Only used when joystick_type == "keyboard"
+    std::map<std::string, std::string> keyboard_map;
+    double keyboard_press_duration = 0.3;
+    double keyboard_axis_step = 0.1;
+    double keyboard_trigger_lead = 0.15;
 
     int print_scene_information;
 
@@ -41,6 +49,20 @@ inline struct SimulationConfig
             joystick_bits = cfg["joystick_bits"].as<int>();
             print_scene_information = cfg["print_scene_information"].as<int>();
             enable_elastic_band = cfg["enable_elastic_band"].as<int>();
+
+            // Optional; defaults above apply when absent.
+            if(cfg["keyboard_map"]) {
+                keyboard_map = cfg["keyboard_map"].as<std::map<std::string, std::string>>();
+            }
+            if(cfg["keyboard_press_duration"]) {
+                keyboard_press_duration = cfg["keyboard_press_duration"].as<double>();
+            }
+            if(cfg["keyboard_axis_step"]) {
+                keyboard_axis_step = cfg["keyboard_axis_step"].as<double>();
+            }
+            if(cfg["keyboard_trigger_lead"]) {
+                keyboard_trigger_lead = cfg["keyboard_trigger_lead"].as<double>();
+            }
         }
         catch(const std::exception& e)
         {

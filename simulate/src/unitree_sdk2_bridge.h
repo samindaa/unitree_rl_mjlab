@@ -13,6 +13,7 @@
 
 #include "param.h"
 #include "physics_joystick.h"
+#include "keyboard_joystick.h"
 
 #define MOTOR_SENSOR_NUM 3
 
@@ -31,6 +32,11 @@ public:
                 joystick = std::make_shared<XBoxJoystick>(param::config.joystick_device, param::config.joystick_bits);
             } else if(param::config.joystick_type == "switch") {
                 joystick  = std::make_shared<SwitchJoystick>(param::config.joystick_device, param::config.joystick_bits);
+            } else if(param::config.joystick_type == "keyboard") {
+                joystick = std::make_shared<KeyboardJoystick>(param::config.keyboard_map,
+                                                              param::config.keyboard_press_duration,
+                                                              param::config.keyboard_axis_step,
+                                                              param::config.keyboard_trigger_lead);
             } else {
                 std::cerr << "Unsupported joystick type: " << param::config.joystick_type << std::endl;
                 exit(EXIT_FAILURE);
