@@ -16,6 +16,7 @@ from typing import Any, List, TypedDict
 
 import mujoco
 import numpy as np
+import trimesh
 import viser
 
 from mjlab.asset_zoo.robots import (
@@ -28,10 +29,36 @@ from mjlab.terrains.terrain_generator import (
   TerrainGenerator,
   TerrainGeneratorCfg,
 )
-from mjlab.viewer.viser.conversions import (
+from mjlab.viewer.viser import (
+  create_primitive_mesh,
   merge_geoms,
-  merge_geoms_global,
+  mujoco_mesh_to_trimesh,
 )
+
+
+def merge_geoms_global(
+  mj_model: mujoco.MjModel, mj_data: mujoco.MjData, geom_ids: List[int]
+) -> trimesh.Trimesh:
+  """Merge multiple geoms into a single trimesh using world-space coordinates."""
+  meshes = []
+  for geom_id in geom_ids:
+    if mj_model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_MESH:
+      mesh = mujoco_mesh_to_trimesh(mj_model, geom_id)
+    else:
+      mesh = create_primitive_mesh(mj_model, geom_id)
+
+    # Use world-space position and rotation from mj_data.
+    transform = np.eye(4)
+    transform[:3, :3] = mj_data.geom_xmat[geom_id].reshape(3, 3)
+    transform[:3, 3] = mj_data.geom_xpos[geom_id]
+    mesh.apply_transform(transform)
+    meshes.append(mesh)
+
+  if not meshes:
+    return trimesh.Trimesh()
+  if len(meshes) == 1:
+    return meshes[0]
+  return trimesh.util.concatenate(meshes)
 
 # Supported robots for visualization.
 ROBOT_CFG_GETTERS = {

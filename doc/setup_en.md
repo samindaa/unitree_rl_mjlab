@@ -8,41 +8,16 @@
 
 ---
 
-## 1. Creating a Virtual Environment
+## 1. Installing uv
 
-It is recommended to run training or deployment programs in a virtual environment. Conda is recommended for creating virtual environments. If Conda is already installed on your system, you can skip step 1.1.
-
-### 1.1 Download and Install MiniConda
-
-MiniConda is a lightweight distribution of Conda, suitable for creating and managing virtual environments. Use the following commands to download and install:
+The project uses [uv](https://docs.astral.sh/uv/) to manage its Python version,
+virtual environment and dependencies. If uv is already installed, skip this step.
 
 ```bash
-mkdir -p ~/miniconda3
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
-bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
-rm ~/miniconda3/miniconda.sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-After installation, initialize Conda:
-
-```bash
-~/miniconda3/bin/conda init --all
-source ~/.bashrc
-```
-
-### 1.2 Create a New Environment
-
-Use the following command to create a virtual environment:
-
-```bash
-conda create -n unitree_rl_mjlab python=3.11
-```
-
-### 1.3 Activate the Virtual Environment
-
-```bash
-conda activate unitree_rl_mjlab
-```
+Restart the shell (or `source ~/.bashrc`) so that `uv` is on your `PATH`.
 
 ---
 
@@ -56,18 +31,40 @@ Clone the repository using Git:
 git clone https://github.com/unitreerobotics/unitree_rl_mjlab.git
 ```
 
-### 2.2 Install Dependencies
+### 2.2 System Dependencies
 
 ```bash
 sudo apt install -y libyaml-cpp-dev libboost-all-dev libeigen3-dev libspdlog-dev libfmt-dev
 ```
 
-All other dependencies are specified in the setup.py file.
-Navigate to the project root directory and install them with:
+### 2.3 Python Dependencies
+
+All Python dependencies are specified in the `pyproject.toml` file and pinned in
+`uv.lock`. Navigate to the project root directory and create the environment with:
 
 ```bash
 cd unitree_rl_mjlab
-pip install -e .
+uv sync --extra cu128
+```
+
+This creates a `.venv/` directory containing Python and every dependency,
+including `mjlab==1.5.3` and a CUDA 12.8 build of PyTorch. On a machine without
+an Nvidia GPU, use `uv sync --extra cpu` instead.
+
+### 2.4 Running
+
+Prefix commands with `uv run`, which uses the project environment without
+requiring activation:
+
+```bash
+uv run python scripts/train.py Unitree-G1-Flat --env.scene.num-envs=4096
+```
+
+Alternatively, activate the environment once and call `python` directly:
+
+```bash
+source .venv/bin/activate
+python scripts/train.py Unitree-G1-Flat --env.scene.num-envs=4096
 ```
 
 ## Summary

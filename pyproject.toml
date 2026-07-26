@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "unitree_rl_mjlab"
+version = "0.0.1"
+description = "Reinforcement learning tasks and sim-to-real deployment for Unitree robots, built on mjlab."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = "Apache-2.0"
+license-files = ["LICENCE"]
+keywords = ["mujoco", "mjlab", "reinforcement-learning", "robotics", "unitree"]
+dependencies = [
+  "mjlab==1.5.3",
+]
+
+# Pick the torch build to install: `uv sync --extra cu128` (NVIDIA GPU) or
+# `uv sync --extra cpu`. Without an extra, torch comes from PyPI.
+[project.optional-dependencies]
+cu128 = ["torch>=2.7.0"]
+cpu = ["torch>=2.7.0"]
+
+# The importable package is the top-level `src` directory (`from src import ...`).
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.uv]
+conflicts = [
+  [{ extra = "cu128" }, { extra = "cpu" }],
+]
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu128", extra = "cu128", marker = "sys_platform != 'darwin'" },
+  { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform != 'darwin'" },
+]
