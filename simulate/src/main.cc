@@ -683,6 +683,33 @@ int main(int argc, char **argv)
     std::make_unique<mj::GlfwAdapter>(),
     &cam, &opt, &pert, /* is_passive = */ false);
 
+  // Command tap: lets scripts/sim_viser_mirror.py drive the same commands the
+  // GLFW window (elastic band, reset) and the terminal keyboard accept.
+  std::unique_ptr<CommandTap> command_tap;
+  if (param::config.state_tap_port > 0)
+  {
+    command_tap = std::make_unique<CommandTap>(
+      param::config.state_tap_port + 1, [&sim](char key) {
+        if (param::config.enable_elastic_band == 1)
+        {
+          if (key == '9') { elastic_band.enable_ = !elastic_band.enable_; return; }
+          if (key == '7') { elastic_band.length_ -= 0.1; return; }
+          if (key == '8') { elastic_band.length_ += 0.1; return; }
+        }
+        if (key == '\b')
+        {
+          if (m && d)
+          {
+            const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
+            mj_resetData(m, d);
+            mj_forward(m, d);
+          }
+          return;
+        }
+        if (auto *kb = KeyboardJoystick::active()) { kb->inject(key); }
+      });
+  }
+
   std::thread unitree_thread(UnitreeSdk2BridgeThread, nullptr);
 
   // start physics thread

@@ -206,6 +206,38 @@ cd deploy/robots/g1/build
 ./g1_ctrl --network=lo
 ```
 
+**Headless / remote-desktop visualization (viser mirror)**
+
+On machines without GPU-backed OpenGL (e.g. over Chrome Remote Desktop), the
+simulator's window falls back to slow software rendering that also drags the
+physics down. Instead, run the simulator without a visible window and view it
+in the browser, where all rendering happens in WebGL:
+
+```bash
+# Terminal 1 — simulator, no visible window (the keyboard joystick still
+# works: it reads this terminal, not the window). `env -u WAYLAND_DISPLAY`
+# matters on Wayland sessions: GLFW 3.4 prefers WAYLAND_DISPLAY over the
+# virtual X display, which would pop the window up on the real screen.
+env -u WAYLAND_DISPLAY xvfb-run -a ./simulate/build/unitree_mujoco
+
+# Terminal 2 — viser mirror; open http://localhost:8080 in your browser
+uv run scripts/sim_viser_mirror.py
+
+# Terminal 3 — controller, as usual
+cd deploy/robots/g1/build && ./g1_ctrl --network=lo
+```
+
+The simulator streams `(time, qpos)` over UDP to `127.0.0.1:9870`
+(`state_tap_port` in `simulate/config.yaml`; set to 0 to disable), and the
+mirror renders the same scene MJCF with [viser](https://github.com/nerfstudio-project/viser).
+The mirror's sidebar also exposes every simulator command as buttons — the FSM
+chords and velocity keys from `keyboard_map`, the elastic band
+(toggle/raise/lower, i.e. the window's `9`/`7`/`8` keys), and simulation reset —
+sent back over UDP on port `state_tap_port + 1`. Killing the mirror never
+affects the simulation or the controller. See
+[doc/deploy_architecture.md](doc/deploy_architecture.md#browser-based-visualization-viser-mirror)
+for details, including why the mirror must not join the DDS domain from Python.
+
 ## 4.5.2 Real-Robot Deployment
 
 Launch the control program on the real robot:

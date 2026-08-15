@@ -14,6 +14,7 @@
 #include "param.h"
 #include "physics_joystick.h"
 #include "keyboard_joystick.h"
+#include "state_tap.h"
 
 #define MOTOR_SENSOR_NUM 3
 
@@ -42,7 +43,9 @@ public:
                 exit(EXIT_FAILURE);
             }
         }
-
+        if(param::config.state_tap_port > 0) {
+            state_tap = std::make_unique<StateTap>(model, param::config.state_tap_port);
+        }
     }
 
     virtual void start() {}
@@ -95,6 +98,8 @@ protected:
     int secondary_imu_acc_adr_ = -1;
 
     std::shared_ptr<unitree::common::UnitreeJoystick> joystick = nullptr;
+    std::unique_ptr<StateTap> state_tap = nullptr;
+    int state_tap_counter_ = 0;
 
     void _check_sensor()
     {
@@ -248,6 +253,11 @@ public:
         // wireless_controller
         if(wireless_controller->joystick) {
             wireless_controller->unlockAndPublish();
+        }
+        // state tap for external visualizers, at 1/10th of the bridge rate
+        if(state_tap && ++state_tap_counter_ >= 10) {
+            state_tap_counter_ = 0;
+            state_tap->send(mj_data_);
         }
     }
 

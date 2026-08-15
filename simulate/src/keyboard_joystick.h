@@ -71,13 +71,28 @@ public:
 
         running_ = true;
         read_thread_ = std::thread([this]{ readLoop(); });
+        active() = this;
     }
 
     ~KeyboardJoystick()
     {
+        active() = nullptr;
         running_ = false;
         if(read_thread_.joinable()) { read_thread_.join(); }
         restoreTerminal();
+    }
+
+    /// Feed one key as if it had been typed in the terminal (used by the
+    /// command tap so scripts/sim_viser_mirror.py can drive the FSM). Safe to
+    /// call from any thread.
+    void inject(char c) { onKey(c); }
+
+    /// The single live instance, for command routing; nullptr when the
+    /// keyboard joystick is not in use.
+    static KeyboardJoystick*& active()
+    {
+        static KeyboardJoystick* instance = nullptr;
+        return instance;
     }
 
     void update() override

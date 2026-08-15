@@ -78,5 +78,7 @@ FSM:
 
     motion_file: config/policy/mimic/dance1_subject2/params/dance1_subject2.npz
     policy_dir: config/policy/mimic/dance1_subject2/
+    # motion_file: config/policy/mimic/gdm_0/params/740ae4e9.npz
+    # policy_dir: config/policy/mimic/gdm_0/
     time_start: 0.0
     time_end: 1000.0

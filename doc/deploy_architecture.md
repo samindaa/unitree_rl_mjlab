@@ -424,6 +424,56 @@ which is a quick way to confirm a physical controller is being read at all.
 
 ---
 
+## Browser-based visualization (viser mirror)
+
+On machines without GPU-backed OpenGL (e.g. over Chrome Remote Desktop) the
+simulator's GLFW window falls back to software rendering, which is slow and — via
+the render/physics mutex — drags the whole simulation down. The fix is to not
+render locally at all:
+
+```bash
+# Terminal 1 — simulator without a visible window (keyboard joystick still
+# works: it reads the terminal, not the GLFW window). `env -u WAYLAND_DISPLAY`
+# matters on Wayland sessions: GLFW 3.4 prefers WAYLAND_DISPLAY over the
+# virtual X display, which would pop the window up on the real screen.
+env -u WAYLAND_DISPLAY xvfb-run -a ./simulate/build/unitree_mujoco
+
+# Terminal 2 — viser mirror; open http://localhost:8080 in your browser
+uv run scripts/sim_viser_mirror.py
+
+# Terminal 3 — controller, as usual
+cd deploy/robots/g1/build && ./g1_ctrl --network=lo
+```
+
+The simulator streams `(time, qpos)` datagrams to `127.0.0.1:9870` at 100 Hz
+(`state_tap_port` in [`simulate/config.yaml`](../simulate/config.yaml),
+implemented in [`state_tap.h`](../simulate/src/state_tap.h)); the mirror loads
+the same scene MJCF, runs forward kinematics, and serves the scene over
+websocket — all rendering happens in the browser's WebGL. Killing the mirror
+never affects the simulation or the controller.
+
+Commands flow the other way on `state_tap_port + 1`: the mirror's sidebar has
+buttons for every simulator command, each sent as a one-key datagram that the
+`CommandTap` routes exactly like the native key paths —
+
+| Sidebar control | Key sent | Native equivalent |
+| --- | --- | --- |
+| FSM chords (from `keyboard_map`) | `1`/`2`/`3`/`0`… | terminal keyboard joystick |
+| Velocity move / turn / stop | `w a s d q e` + space | terminal keyboard joystick |
+| Elastic band toggle / raise / lower | `9` / `7` / `8` | GLFW window keys |
+| Reset simulation | backspace | GLFW window backspace |
+
+so the GLFW window (invisible under `xvfb-run`) and the simulator terminal are
+both fully optional. The FSM-chord and velocity buttons appear when
+`joystick_type` is `"keyboard"`; band buttons when `enable_elastic_band: 1`.
+
+The mirror deliberately does **not** subscribe to the DDS topics: the simulator
+and controller link cyclonedds 0.10.2, which segfaults on the XTypes discovery
+data emitted by the newer cyclonedds releases that Python 3.12 wheels exist
+for. Keep Python processes off the DDS domain.
+
+---
+
 ## Things to know before you trust it
 
 1. **`bad_orientation` is disabled.**

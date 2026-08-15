@@ -34,6 +34,10 @@ inline struct SimulationConfig
     int enable_elastic_band;
     int band_attached_link = 0;
 
+    // UDP port for the state tap consumed by scripts/sim_viser_mirror.py;
+    // 0 disables it.
+    int state_tap_port = 9870;
+
     void load_from_yaml(const std::string &filename)
     {
         auto cfg = YAML::LoadFile(filename);
@@ -62,6 +66,9 @@ inline struct SimulationConfig
             }
             if(cfg["keyboard_trigger_lead"]) {
                 keyboard_trigger_lead = cfg["keyboard_trigger_lead"].as<double>();
+            }
+            if(cfg["state_tap_port"]) {
+                state_tap_port = cfg["state_tap_port"].as<int>();
             }
         }
         catch(const std::exception& e)
