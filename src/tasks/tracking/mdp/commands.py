@@ -362,11 +362,16 @@ class MotionCommand(CommandTerm):
 
     self.robot.clear_state(env_ids=env_ids)
 
-  def _update_command(self):
-    self.time_steps += 1
-    env_ids = torch.where(self.time_steps >= self.motion.time_step_total)[0]
-    if env_ids.numel() > 0:
-      self._resample_command(env_ids)
+  def _update_command(self, env_ids: torch.Tensor | None = None):
+    # env_ids is None on the per-step update (advance all envs); on the
+    # reset path only the reset envs advance their motion frame index.
+    if env_ids is None:
+      self.time_steps += 1
+    else:
+      self.time_steps[env_ids] += 1
+    wrap_ids = torch.where(self.time_steps >= self.motion.time_step_total)[0]
+    if wrap_ids.numel() > 0:
+      self._resample_command(wrap_ids)
 
     anchor_pos_w_repeat = self.anchor_pos_w[:, None, :].repeat(
       1, len(self.cfg.body_names), 1
@@ -392,7 +397,9 @@ class MotionCommand(CommandTerm):
       delta_ori_w, self.body_pos_w - anchor_pos_w_repeat
     )
 
-    if self.cfg.sampling_mode == "adaptive":
+    # Fold failure counts into the EMA only on the per-step update so
+    # manual resets do not decay it faster.
+    if env_ids is None and self.cfg.sampling_mode == "adaptive":
       self.bin_failed_count = (
         self.cfg.adaptive_alpha * self._current_bin_failed
         + (1 - self.cfg.adaptive_alpha) * self.bin_failed_count

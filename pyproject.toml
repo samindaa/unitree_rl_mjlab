@@ -12,7 +12,7 @@ license = "Apache-2.0"
 license-files = ["LICENCE"]
 keywords = ["mujoco", "mjlab", "reinforcement-learning", "robotics", "unitree"]
 dependencies = [
-  "mjlab==1.5.3",
+  "mjlab==1.6.0",
 ]
 
 # Pick the torch build to install: `uv sync --extra cu128` (NVIDIA GPU) or
