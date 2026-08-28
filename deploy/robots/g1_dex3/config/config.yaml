@@ -1,0 +1,94 @@
+FSM:
+  _: # enabled fsms
+    Passive:
+      id: 1
+    FixStand:
+      id: 2
+    Velocity:
+      id: 3
+      type: RLBase
+
+    Umt:
+      id: 5
+      type: UmtMimic
+
+
+  Passive:
+    transitions:
+      FixStand: LT + up.on_pressed
+    mode: [
+      1,1,1,1,1,1,
+      1,1,1,1,1,1,
+      1,1,1,
+      1,1,1,1,1,1,1,
+      1,1,1,1,1,1,1,
+    ]
+    kd: [
+      3,3,3,3,3,3,
+      3,3,3,3,3,3,
+      3,3,3,
+      3,3,3,3,3,3,3,
+      3,3,3,3,3,3,3,
+    ]
+
+
+  FixStand:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RT + A.on_pressed
+
+    kp: [
+      100,100,100,150,40,40,
+      100,100,100,150,40,40,
+      200,200,200,
+      40,40,40,40,40,40,40,
+      40,40,40,40,40,40,40,
+    ]
+    kd: [
+      2,2,2,4,2,2,
+      2,2,2,4,2,2,
+      5,5,5,
+      10,10,10,10,10,10,10,
+      10,10,10,10,10,10,10,
+    ]
+    ts: [0, 2]
+    qs: [
+      [],
+      [ -0.1, 0,0,0.3,-0.2,0,
+        -0.1, 0,0,0.3,-0.2,0,
+        0,0,0,
+        0.35, 0.18,0,0.87,0,0,0,
+        0.35,-0.18,0,0.87,0,0,0
+      ]
+    ]
+
+
+  Velocity:
+    transitions:
+      Passive: LT + B.on_pressed
+      Umt: RB + A.on_pressed
+
+    policy_dir: config/policy/velocity
+
+
+  # UMT tracking (smp_v2 task Umt-Tracking-G1-No-State-Estimation).
+  Umt:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RT + A.on_pressed
+
+    # One clip extracted from the umt bundle with
+    #   scripts/umt_bundle_to_deploy_npz.py <bundle.zip> <clip_name> <out.npz>
+    # (cnpy-safe: numeric arrays only, uncompressed).
+    motion_file: config/policy/umt/v0/params/umt_deploy_1282_27_pre1s_post1s.npz
+    policy_dir: config/policy/umt/v0/
+    time_start: 0.0
+    time_end: 1000.0
+    end_state: Velocity
+
+    # Clip layout (defaults match the G1+Dex3 entity: 43 joints / 46 bodies).
+    # Uncomment to override for a clip with a different body/joint ordering.
+    # root_body_index: 0      # pelvis
+    # anchor_body_index: 15   # torso_link
+    # body_joint_ids: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,29,30,31,32,33,34,35]
+    # hand_joint_ids: [22,23,24,25,26,27,28,36,37,38,39,40,41,42]
