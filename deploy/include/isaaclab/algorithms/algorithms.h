@@ -34,6 +34,10 @@ public:
         // Init Model
         env = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "onnx_model");
         session_options.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
+        // An explicit thread count keeps ORT from pinning threads to CPU ids
+        // that a Jetson power profile has taken offline (it aborts otherwise).
+        session_options.SetIntraOpNumThreads(1);
+        session_options.SetInterOpNumThreads(1);
 
         session = std::make_unique<Ort::Session>(env, model_path.c_str(), session_options);
 
