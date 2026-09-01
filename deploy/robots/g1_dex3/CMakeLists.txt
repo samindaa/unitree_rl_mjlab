@@ -8,9 +8,9 @@ find_package(yaml-cpp REQUIRED)
 find_package(ZLIB REQUIRED)
 
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-    set(ONNXRUNTIME_DIR "${PROJECT_SOURCE_DIR}/../../thirdparty/onnxruntime-linux-x64-1.22.0")
+    set(ONNXRUNTIME_DIR "${PROJECT_SOURCE_DIR}/../../thirdparty/onnxruntime-linux-x64-1.20.1")
 elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-    set(ONNXRUNTIME_DIR "${PROJECT_SOURCE_DIR}/../../thirdparty/onnxruntime-linux-aarch64-1.22.0")
+    set(ONNXRUNTIME_DIR "${PROJECT_SOURCE_DIR}/../../thirdparty/onnxruntime-linux-aarch64-1.20.1")
 endif()
 
 include_directories(
@@ -36,7 +36,7 @@ link_libraries(
   Boost::program_options
   yaml-cpp
   fmt
-  ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so.1.22.0
+  ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so.1.20.1
   cnpy_lib
   ZLIB::ZLIB
 )
