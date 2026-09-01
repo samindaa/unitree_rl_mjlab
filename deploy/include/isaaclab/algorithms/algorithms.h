@@ -96,6 +96,9 @@ public:
         return action;
     }
 
+    const std::vector<const char*>& get_input_names() const { return input_names; }
+    const std::vector<int64_t>& get_input_sizes() const { return input_sizes; }
+
 private:
     Ort::Env env;
     Ort::SessionOptions session_options;
