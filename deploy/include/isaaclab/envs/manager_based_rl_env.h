@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 #include <yaml-cpp/yaml.h>
 #include "isaaclab/manager/observation_manager.h"
 #include "isaaclab/manager/action_manager.h"

@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 #include "unitree/dds_wrapper/common/unitree_joystick.hpp"
 
 namespace isaaclab

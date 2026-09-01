@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 #include <yaml-cpp/yaml.h>
 #include <unordered_set>
 #include "isaaclab/manager/manager_term_cfg.h"

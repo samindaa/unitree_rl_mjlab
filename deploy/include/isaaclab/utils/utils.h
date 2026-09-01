@@ -3,7 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 #include <spdlog/spdlog.h>
 
 namespace isaaclab

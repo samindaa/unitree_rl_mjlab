@@ -14,3 +14,6 @@ deploy/robots/r1/build
 deploy/robots/a2/build
 src/assets/motions/g1/dance1_subject2.npz
 simulate/build
+# Bazel (deploy workspace)
+deploy/bazel-*
+deploy/robots/g1_dex3/build

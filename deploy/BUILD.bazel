@@ -1,0 +1,46 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = "onnxruntime",
+    actual = select({
+        "@platforms//cpu:x86_64": "@onnxruntime_linux_x64//:onnxruntime",
+        "@platforms//cpu:arm64": "@onnxruntime_linux_aarch64//:onnxruntime",
+    }),
+)
+
+# Shared header-only core: FSM, isaaclab mirror, param, joystick DSL.
+cc_library(
+    name = "isaaclab_core",
+    hdrs = glob([
+        "include/**/*.h",
+        "include/**/*.hpp",
+    ]),
+    includes = ["include"],
+    deps = [
+        ":onnxruntime",
+        "@boost.program_options",
+        "@eigen",
+        "@fmt",
+        "@spdlog",
+        "@unitree_sdk2",
+        "@yaml-cpp",
+    ],
+)
+
+platform(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+platform(
+    name = "linux_aarch64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)

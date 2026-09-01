@@ -1,0 +1,24 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+
+cc_library(
+    name = "g1_dex3_lib",
+    srcs = glob(["src/*.cpp"]),
+    hdrs = glob(["include/*.h"]),
+    includes = ["include"],
+    deps = [
+        "//:isaaclab_core",
+        "//thirdparty/cnpy",
+    ],
+)
+
+cc_binary(
+    name = "g1_dex3_ctrl",
+    srcs = ["main.cpp"],
+    deps = [":g1_dex3_lib"],
+)
+
+cc_binary(
+    name = "bench_umt",
+    srcs = ["bench_umt.cpp"],
+    deps = ["//:isaaclab_core"],
+)
