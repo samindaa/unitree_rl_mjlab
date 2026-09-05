@@ -85,6 +85,10 @@ FSM:
     time_start: 0.0
     time_end: 1000.0
     end_state: Velocity
+    # Sim2sim latency-injection experiment (leg-shuffle diagnosis): apply
+    # motor commands this many ms late. 0 = off. Sweep 5/10/20/40 in
+    # unitree_mujoco to find where foot-plant degrades; KEEP 0 ON THE ROBOT.
+    action_delay_ms: 15
 
     # Clip layout (defaults match the G1+Dex3 entity: 43 joints / 46 bodies).
     # Uncomment to override for a clip with a different body/joint ordering.

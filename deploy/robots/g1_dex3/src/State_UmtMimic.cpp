@@ -1,4 +1,5 @@
 #include "State_UmtMimic.h"
+#include <ctime>
 #include "unitree_articulation.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
@@ -185,6 +186,14 @@ State_UmtMimic::State_UmtMimic(int state_mode, std::string state_string)
     if (cfg["end_state"]) {
         end_state = cfg["end_state"].as<std::string>();
     }
+    if (cfg["action_delay_ms"]) {
+        action_delay_ms_ = cfg["action_delay_ms"].as<float>();
+        if (action_delay_ms_ > 0.0f) {
+            spdlog::warn("UMT latency injection ACTIVE: commands applied {} ms late "
+                         "(sim2sim experiment knob — set action_delay_ms: 0 for normal use)",
+                         action_delay_ms_);
+        }
+    }
 
     // The action term reads the reference through State_UmtMimic::motion,
     // so `motion` must be set before the env (and its ActionManager) is built.
@@ -227,6 +236,16 @@ void State_UmtMimic::enter()
 
     motion = motion_; // set for specific motion
     env->reset();
+
+    probe_t_.clear();
+    probe_ref_.clear();
+    probe_raw_.clear();
+    probe_cmd_.clear();
+    probe_q_.clear();
+    probe_dq_.clear();
+    probe_path_ = fmt::format("/tmp/umt_probe_{}.npz", std::time(nullptr));
+    delay_buf_.clear();
+
     // Start policy thread
     policy_thread_running = true;
     policy_thread = std::thread([this]{
@@ -250,6 +269,20 @@ void State_UmtMimic::enter()
             motion->update(env->episode_length * env->step_dt + time_range_[0]);
             env->step();
 
+            {   // limit-probe sample (same frame the action was computed from)
+                const Eigen::VectorXf ref = motion->body_joint_pos();
+                const auto raw = env->action_manager->action();
+                const auto cmd = env->action_manager->processed_actions();
+                const auto& q  = env->robot->data.joint_pos;
+                const auto& dq = env->robot->data.joint_vel;
+                probe_t_.push_back(env->episode_length * env->step_dt);
+                probe_ref_.insert(probe_ref_.end(), ref.data(), ref.data() + ref.size());
+                probe_raw_.insert(probe_raw_.end(), raw.begin(), raw.end());
+                probe_cmd_.insert(probe_cmd_.end(), cmd.begin(), cmd.end());
+                probe_q_.insert(probe_q_.end(), q.data(), q.data() + q.size());
+                probe_dq_.insert(probe_dq_.end(), dq.data(), dq.data() + dq.size());
+            }
+
             // Sleep
             std::this_thread::sleep_until(sleepTill);
             sleepTill += dt;
@@ -258,9 +291,43 @@ void State_UmtMimic::enter()
 }
 
 
+void State_UmtMimic::probe_dump_()
+{
+    if (probe_t_.empty()) return;
+    const size_t T = probe_t_.size();
+    const size_t J = probe_cmd_.size() / T;
+    cnpy::npz_save(probe_path_, "t", probe_t_.data(), {T}, "w");
+    cnpy::npz_save(probe_path_, "ref", probe_ref_.data(), {T, J}, "a");
+    cnpy::npz_save(probe_path_, "action_raw", probe_raw_.data(), {T, J}, "a");
+    cnpy::npz_save(probe_path_, "q_cmd", probe_cmd_.data(), {T, J}, "a");
+    cnpy::npz_save(probe_path_, "q_meas", probe_q_.data(), {T, J}, "a");
+    cnpy::npz_save(probe_path_, "dq_meas", probe_dq_.data(), {T, J}, "a");
+    spdlog::info("UMT limit-probe: {} steps ({} joints) -> {}", T, J, probe_path_);
+    probe_t_.clear();
+    probe_ref_.clear();
+    probe_raw_.clear();
+    probe_cmd_.clear();
+    probe_q_.clear();
+    probe_dq_.clear();
+}
+
+
 void State_UmtMimic::run()
 {
     auto action = env->action_manager->processed_actions();
+    if (action_delay_ms_ > 0.0f) {
+        // apply the newest command published at or before now - delay; while
+        // the buffer is younger than the delay (right after enter), the
+        // oldest available command is used, so the lag ramps up to the target
+        const auto now = std::chrono::steady_clock::now();
+        delay_buf_.emplace_back(now, action);
+        const auto cutoff = now - std::chrono::microseconds(
+            static_cast<long>(action_delay_ms_ * 1000.0f));
+        while (delay_buf_.size() > 1 && delay_buf_[1].first <= cutoff) {
+            delay_buf_.pop_front();
+        }
+        action = delay_buf_.front().second;
+    }
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }

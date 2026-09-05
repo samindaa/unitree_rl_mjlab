@@ -97,3 +97,24 @@ deploy stack. Alternatively harden `algorithms.h` to clamp any dim < 0 to 1 befo
    (`fps, joint_pos, joint_vel, body_pos_w, body_quat_w, body_lin_vel_w, body_ang_vel_w`).
 3. No string/object dtypes anywhere in the npz.
 4. Confirm `deploy.yaml` obs terms sum to the ONNX input width.
+
+## Issue 3: UMT policy falls in unitree_mujoco — ONNX exported with the wrong activation (2026-08-28)
+
+**Symptom.** `g1_dex3` UMT controller: every observation/action term checked out against the
+training code, ONNX had static shapes and the soft-clip tail, yet the robot fell within a
+second in `unitree_mujoco` while the same clip played fine in mjlab.
+
+**Root cause.** `smp_v2/scripts/export_policy_onnx.py` rebuilds the actor from the
+`actor_state_dict` weight shapes and takes the activation from a flag (default `relu`).
+Run `283861004-hiphi_umt_no_se` was trained with **Mish** (and a 2048-2048-1024-1024-512-512
+actor, not the 1024-wide one in `zest_tracking/rl_cfg.py`). Activations carry no weights, so
+the strict `load_state_dict` succeeds and the script's own torch-vs-ONNX round-trip check
+passes — both sides are equally wrong.
+
+**Fix.** Re-export with `--activation mish`. Quick check on any exported policy:
+`Counter(n.op_type for n in onnx.load(p).graph.node)` — a Mish actor shows
+`Softplus`/`Tanh`/`Mul` per layer, a ReLU one shows `Relu`.
+
+**Lesson.** The export script cannot detect activation or `mean_clip_scale` from the
+checkpoint; record them with the run (or read them from the run's saved agent cfg) rather
+than trusting the defaults.

@@ -22,7 +22,9 @@
 // Action (29): q_cmd = q_ref[body_joint] + scale * a   (ReferenceJointPositionAction)
 
 #include "FSM/State_RLBase.h"
+#include <chrono>
 #include <cnpy.h>
+#include <deque>
 #include <numeric>
 
 
@@ -39,6 +41,7 @@ public:
         if (policy_thread.joinable()) {
             policy_thread.join();
         }
+        probe_dump_();
     }
 
     class MotionLoader_;
@@ -51,6 +54,21 @@ private:
     std::thread policy_thread;
     bool policy_thread_running = false;
     std::array<float, 2> time_range_;
+
+    // Limit-probe: per policy step (50 Hz), flattened [step, 29] rows of the
+    // reference pose, raw policy action, commanded PD target (ref + scale*a),
+    // and measured joint state. Filled only by the policy thread; dumped to an
+    // uncompressed npz (cnpy-safe) when the state exits.
+    std::vector<float> probe_t_, probe_ref_, probe_raw_, probe_cmd_, probe_q_, probe_dq_;
+    std::string probe_path_;
+    void probe_dump_();
+
+    // Latency injection (sim2sim leg-shuffle experiment): apply the command
+    // published action_delay_ms ago instead of the current one, buffered at
+    // the 1 kHz FSM rate in run(). 0 (default) = passthrough. NB the probe's
+    // q_cmd records the UNDELAYED policy output; the delay acts downstream.
+    float action_delay_ms_ = 0.0f;
+    std::deque<std::pair<std::chrono::steady_clock::time_point, std::vector<float>>> delay_buf_;
 };
 
 
