@@ -81,7 +81,7 @@ FSM:
     #   scripts/umt_bundle_to_deploy_npz.py <bundle.zip> <clip_name> <out.npz>
     # (cnpy-safe: numeric arrays only, uncompressed).
     motion_file: config/policy/umt/v0/params/umt_deploy_1282_27_pre1s_post1s.npz
-    policy_dir: config/policy/umt/v0/
+    policy_dir: config/policy/umt/v2/
     time_start: 0.0
     time_end: 1000.0
     end_state: Velocity
