@@ -51,3 +51,5 @@ link_libraries(${PROJECT_NAME}_lib)
 add_executable(g1_dex3_ctrl main.cpp)
 
 add_executable(bench_umt bench_umt.cpp)
+
+add_executable(topic_probe tools/topic_probe.cpp)

@@ -1,3 +1,40 @@
+# Dex3-1 hands (Dex3Hands.h). Published on rt/dex3/{left,right}/cmd by a
+# background thread in every FSM state: the rest pose below (Passive,
+# FixStand, Velocity, and on leaving Umt / HiphiStudent) unless a state
+# overrides it — Umt and HiphiStudent stream the clip's finger reference.
+# Gains are the ones Unitree's own Dex3 teleop controller sends
+# (avp_teleoperate Dex3_1_Controller). Set enable: false when the hands are
+# not mounted.
+dex3:
+  enable: true
+  kp: 1.5
+  kd: 0.2
+  publish_hz: 100
+  # Rest pose, 14 floats: left thumb_0, thumb_1, thumb_2, middle_0, middle_1,
+  # index_0, index_1, then right. Thumbs folded across the palm: with the arms
+  # in the stand pose the straight thumb (all zeros, the hands' qpos0) sits
+  # 2.4 cm INSIDE the thigh; this pose clears the legs by ~2 cm and the
+  # fingers by 3 cm at both the FixStand and the knees-bent pose (measured in
+  # scene_g1_dex3.xml). The UMT clips still carry straight thumbs.
+  open_pose: [0.35, 1.0, 0.3, 0, 0, 0, 0,   0.35, -1.0, -0.3, 0, 0, 0, 0]
+
+# Streamed inputs (deploy/include/msgs/stream_msgs.h; published by
+# unitree_mujoco, later by robot-side nodes). The current UMT policies use
+# neither; enabling them only makes the base_lin_vel / motion_anchor_pos_b /
+# camera_depth observation terms available to a deploy.yaml.
+sources:
+  odom:                      # rt/odom_pelvis: pelvis IMU site pose (world) + site-frame twist
+    enable: true
+    topic: "rt/odom_pelvis"
+    timeout_ms: 100
+  depth:                     # one entry per camera; key = camera_depth's sensor_name
+    depth_camera:
+      enable: true
+      topic: "rt/depth_camera"
+      width: 64
+      height: 36
+      timeout_ms: 200
+
 FSM:
   _: # enabled fsms
     Passive:
@@ -11,6 +48,9 @@ FSM:
     Umt:
       id: 5
       type: UmtMimic
+    HiphiStudent:
+      id: 6
+      type: HiphiStudent
 
 
   Passive:
@@ -67,6 +107,7 @@ FSM:
     transitions:
       Passive: LT + B.on_pressed
       Umt: RB + A.on_pressed
+      HiphiStudent: RB + B.on_pressed
 
     policy_dir: config/policy/velocity
 
@@ -88,7 +129,7 @@ FSM:
     # Sim2sim latency-injection experiment (leg-shuffle diagnosis): apply
     # motor commands this many ms late. 0 = off. Sweep 5/10/20/40 in
     # unitree_mujoco to find where foot-plant degrades; KEEP 0 ON THE ROBOT.
-    action_delay_ms: 15
+    action_delay_ms: 0.0
 
     # Clip layout (defaults match the G1+Dex3 entity: 43 joints / 46 bodies).
     # Uncomment to override for a clip with a different body/joint ordering.
@@ -96,3 +137,22 @@ FSM:
     # anchor_body_index: 15   # torso_link
     # body_joint_ids: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,29,30,31,32,33,34,35]
     # hand_joint_ids: [22,23,24,25,26,27,28,36,37,38,39,40,41,42]
+
+
+  # Depth-distilled hiphi student on the frozen UMT base (State_HiphiStudent):
+  # needs sources.odom and sources.depth. First plumbing baseline: a pnp64
+  # clip's robot + hand reference only, no objects in the scene.
+  HiphiStudent:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RT + A.on_pressed
+
+    motion_file: config/policy/hiphi_student/v0/params/pnp64_9204_13_1520609083.npz
+    umt_policy_dir: config/policy/hiphi_umt_base/v0/
+    student_policy_dir: config/policy/hiphi_student/v0/
+    depth_sensor: depth_camera   # key under sources.depth
+    time_start: 0.0
+    time_end: 1000.0
+    end_state: Velocity
+    align_z: false
+    require_streams: true        # stale odom (>100 ms) / depth (>200 ms) for 0.5 s -> Velocity

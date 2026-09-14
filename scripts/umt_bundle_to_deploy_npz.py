@@ -13,6 +13,7 @@ bundle manifest so they can be checked against ``config/config.yaml``.
 
 Usage:
     umt_bundle_to_deploy_npz.py BUNDLE.zip CLIP_NAME OUT.npz
+    umt_bundle_to_deploy_npz.py CLIP.npz OUT.npz              # single mjlab-format clip
     umt_bundle_to_deploy_npz.py BUNDLE.zip --list
     umt_bundle_to_deploy_npz.py --onnx policy.onnx   # make batch dim static (in place)
 """
@@ -78,6 +79,38 @@ def main() -> int:
 
     if not args.bundle:
         ap.error("bundle is required unless only --onnx is given")
+
+    if args.bundle.endswith(".npz"):
+        # A single mjlab-format clip (e.g. one of the hiphi pnp64 bundle
+        # clips in /tmp/smp_motion_bundles/...): same numeric arrays, plus
+        # object / cws / name arrays that cnpy cannot read — dropped.
+        out = args.clip if args.clip and args.clip.endswith(".npz") else args.out
+        if not out:
+            ap.error("out .npz is required")
+        with np.load(args.bundle, allow_pickle=True) as data:
+            arrays = {}
+            for k in NUMERIC_KEYS:
+                if k not in data.files:
+                    if k == "fps":
+                        arrays[k] = np.array([50.0], dtype=np.float32)
+                        continue
+                    print(f"error: clip is missing {k!r}", file=sys.stderr)
+                    return 1
+                arrays[k] = np.ascontiguousarray(data[k], dtype=np.float32)
+            names = [str(n) for n in data["joint_names"]] if "joint_names" in data.files else []
+            bodies = [str(n) for n in data["body_names"]] if "body_names" in data.files else []
+        np.savez(out, **arrays)
+        print(f"wrote {out}")
+        for k, v in arrays.items():
+            print(f"  {k:15s} {v.shape} {v.dtype}")
+        if names and bodies:
+            body_joint_ids = [i for i, n in enumerate(names) if re.fullmatch(BODY_JOINT_REGEX, n)]
+            print("\nlayout:")
+            print(f"  root_body_index:   {bodies.index('pelvis')}  # pelvis")
+            print(f"  anchor_body_index: {bodies.index('torso_link')}  # torso_link")
+            print(f"  body_joint_ids:    {body_joint_ids}")
+            print(f"  hand_joint_ids:    {[i for i in range(len(names)) if i not in body_joint_ids]}")
+        return 0
 
     with zipfile.ZipFile(args.bundle) as zf:
         manifest = json.loads(zf.read("manifest.json"))

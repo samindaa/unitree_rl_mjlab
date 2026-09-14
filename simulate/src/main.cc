@@ -33,6 +33,7 @@
 #include "simulate.h"
 #include "array_safety.h"
 #include "unitree_sdk2_bridge.h"
+#include "depth_camera.h"
 #include "param.h"
 
 #define MUJOCO_PLUGIN_DIR "mujoco_plugin"
@@ -84,6 +85,9 @@ public:
   std::vector<double> f_ = {0, 0, 0};
 };
 inline ElasticBand elastic_band;
+
+// Owned by main(); started by the bridge thread once DDS is up.
+inline std::unique_ptr<DepthCameraStreamer> depth_streamer;
 
 
 namespace
@@ -600,7 +604,12 @@ void *UnitreeSdk2BridgeThread(void *arg)
     interface = std::make_unique<Go2Bridge>(m, d);
   }
   interface->start();
-  
+
+  if (depth_streamer)
+  {
+    depth_streamer->start();
+  }
+
   while (true)
   {
     sleep(1);
@@ -634,6 +643,18 @@ void user_key_cb(GLFWwindow* window, int key, int scancode, int act, int mods) {
     if(key==GLFW_KEY_BACKSPACE) {
       mj_resetData(m, d);
       mj_forward(m, d);
+      return;
+    }
+    // Keys typed into the MuJoCo window drive the keyboard joystick too
+    // (it otherwise only reads the terminal unitree_mujoco was started
+    // from). 7/8/9 stay with the elastic band above.
+    if (key == GLFW_KEY_7 || key == GLFW_KEY_8 || key == GLFW_KEY_9) return;
+    char c = 0;
+    if (key >= GLFW_KEY_0 && key <= GLFW_KEY_9) c = static_cast<char>('0' + (key - GLFW_KEY_0));
+    else if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z) c = static_cast<char>('a' + (key - GLFW_KEY_A));
+    else if (key == GLFW_KEY_SPACE) c = ' ';
+    if (c != 0) {
+      if (auto *kb = KeyboardJoystick::active()) { kb->inject(c); }
     }
   }
 }
@@ -708,6 +729,45 @@ int main(int argc, char **argv)
         }
         if (auto *kb = KeyboardJoystick::active()) { kb->inject(key); }
       });
+  }
+
+  // Depth camera stream: the renderer thread needs its own GL context. The
+  // glfw backend uses a hidden window, which GLFW only creates on the main
+  // thread, so make it here; the egl backend needs nothing from this thread.
+  if (param::config.depth_camera.enable)
+  {
+    const auto &dc = param::config.depth_camera;
+    GLFWwindow *depth_window = nullptr;
+    bool ok = true;
+    if (dc.gl == "glfw")
+    {
+      glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+      depth_window = glfwCreateWindow(dc.width, dc.height, "depth_camera", nullptr, nullptr);
+      glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+      ok = depth_window != nullptr;
+    }
+    else if (dc.gl != "egl")
+    {
+      std::cerr << "depth_camera.gl must be 'egl' or 'glfw' (got '" << dc.gl << "')" << std::endl;
+      ok = false;
+    }
+    if (!ok)
+    {
+      std::cerr << "depth_camera: could not set up a GL context; depth stream disabled" << std::endl;
+    }
+    else
+    {
+      DepthCameraStreamer::Config cfg;
+      cfg.camera_name = dc.camera_name;
+      cfg.topic = dc.topic;
+      cfg.width = dc.width;
+      cfg.height = dc.height;
+      cfg.hz = dc.hz;
+      cfg.delay_ms = dc.delay_ms;
+      cfg.dump_dir = dc.dump_dir;
+      cfg.dump_every = dc.dump_every;
+      depth_streamer = std::make_unique<DepthCameraStreamer>(depth_window, &m, &d, &sim->mtx, cfg);
+    }
   }
 
   std::thread unitree_thread(UnitreeSdk2BridgeThread, nullptr);

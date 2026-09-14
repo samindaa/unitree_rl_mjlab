@@ -18,6 +18,7 @@ include_directories(
   mujoco/include
   mujoco/simulate
   src/lodepng
+  ${PROJECT_SOURCE_DIR}/../deploy/include
 )
 link_directories(mujoco/lib)
 
@@ -35,6 +36,7 @@ link_libraries(
   pthread
   mujoco
   glfw
+  EGL
   yaml-cpp
   unitree_sdk2
   boost_program_options

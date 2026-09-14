@@ -4,11 +4,40 @@
 #pragma once
 
 #include "isaaclab/envs/manager_based_rl_env.h"
+#include "sources/depth_source.h"
 
 namespace isaaclab
 {
 namespace mdp
 {
+
+// mjlab `builtin_sensor robot/imu_lin_vel`: pelvis IMU site linear velocity
+// in the site frame, from the streamed state estimate (has_odom).
+REGISTER_OBSERVATION(base_lin_vel)
+{
+    auto & data = env->robot->data.root_lin_vel_b;
+    return std::vector<float>(data.data(), data.data() + data.size());
+}
+
+// tasks/hiphi_tracking_multi_distill/mdp.py `camera_depth`: the latest depth
+// frame of `sensor_name` as clamp(d, min_depth, cutoff_distance) / cutoff,
+// (H, W) row-major — the flat form of the (1, 1, H, W) CNN input.
+REGISTER_OBSERVATION(camera_depth)
+{
+    static std::unordered_map<std::string, std::vector<float>> buffers;
+    const std::string name = params["sensor_name"].as<std::string>();
+    const float cutoff = params["cutoff_distance"].as<float>();
+    const float min_depth = params["min_depth"].as<float>(0.01f);
+
+    auto it = unitree_rl::depth_sources().find(name);
+    if (it == unitree_rl::depth_sources().end()) {
+        throw std::runtime_error("camera_depth: no depth source named '" + name +
+                                 "' (configure it under sources.depth in config.yaml)");
+    }
+    auto & out = buffers[name];
+    it->second->latest_normalized(out, cutoff, min_depth);
+    return out;
+}
 
 REGISTER_OBSERVATION(base_ang_vel)
 {

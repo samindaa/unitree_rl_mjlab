@@ -1,41 +1,42 @@
 #include "State_UmtMimic.h"
 #include <ctime>
+#include "Dex3Hands.h"
+#include "UmtAnchor.h"
 #include "unitree_articulation.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 
-// Yaw offset between the robot's anchor (torso) and the clip's anchor at
-// enter(): the reference lives in the clip's world frame, the robot in the
-// IMU's world frame, so the reference is rotated into the robot's heading
-// (in training the robot is teleported onto the reference at RSI, so the
-// frames coincide by construction).
-static Eigen::Quaternionf init_quat;
 std::shared_ptr<State_UmtMimic::MotionLoader_> State_UmtMimic::motion = nullptr;
-
-
-/// Robot torso (tracking anchor) orientation in world: pelvis IMU quaternion
-/// composed with the three waist joints (yaw, roll, pitch = SDK motors 12-14).
-static Eigen::Quaternionf robot_anchor_quat_w(isaaclab::ManagerBasedRLEnv* env)
-{
-    using G1Type = unitree::BaseArticulation<LowState_t::SharedPtr>;
-    G1Type* robot = dynamic_cast<G1Type*>(env->robot.get());
-
-    auto root_quat = env->robot->data.root_quat_w;
-    auto & motors = robot->lowstate->msg_.motor_state();
-
-    Eigen::Quaternionf torso_quat = root_quat \
-        * Eigen::AngleAxisf(motors[12].q(), Eigen::Vector3f::UnitZ()) \
-        * Eigen::AngleAxisf(motors[13].q(), Eigen::Vector3f::UnitX()) \
-        * Eigen::AngleAxisf(motors[14].q(), Eigen::Vector3f::UnitY());
-
-    return torso_quat;
-}
 
 
 namespace isaaclab
 {
 namespace mdp
 {
+
+/**
+ * mjlab tracking `motion_anchor_pos_b`: the clip's anchor position relative
+ * to the robot's anchor, in the robot anchor frame (3). Needs the odom
+ * source (sources.odom in config.yaml); zeros with a one-time warning
+ * otherwise.
+ */
+REGISTER_OBSERVATION(motion_anchor_pos_b)
+{
+    static bool warned = false;
+    if (!env->robot->data.has_odom) {
+        if (!warned) {
+            spdlog::warn("motion_anchor_pos_b: no state estimate received (sources.odom); returning zeros");
+            warned = true;
+        }
+        return std::vector<float>(3, 0.0f);
+    }
+    auto loader = State_UmtMimic::motion;
+    const Eigen::Vector3f ref_pos_w = umt::init_quat * loader->anchor_position() + umt::init_pos;
+    const Eigen::Quaternionf robot_quat_w = umt::robot_anchor_quat_w(env);
+    const Eigen::Vector3f robot_pos_w = umt::robot_anchor_pos_w(env);
+    const Eigen::Vector3f pos_b = robot_quat_w.conjugate() * (ref_pos_w - robot_pos_w);
+    return {pos_b.x(), pos_b.y(), pos_b.z()};
+}
 
 /**
  * ZEST Table S3 reference observation (smp_v2 tasks/zest_tracking/mdp/observations.py):
@@ -73,7 +74,18 @@ REGISTER_OBSERVATION(zest_ref)
     data.insert(data.end(), ang_vel_b.data(), ang_vel_b.data() + 3);
     data.insert(data.end(), gravity_b.data(), gravity_b.data() + 3);
 
-    const auto & joint_pos = loader->joint_pos();
+    // The frozen UMT base inside the hiphi stack sees the DEFAULT finger pose
+    // in place of the clip's finger reference (UmtResidualActionCfg.mask_hand_ref:
+    // the UMT bundles' hands were frozen there).
+    Eigen::VectorXf joint_pos = loader->joint_pos();
+    if (params["mask_hand_ref"] && params["mask_hand_ref"].as<bool>()) {
+        std::vector<float> hand_default;
+        if (params["hand_default_pos"]) hand_default = params["hand_default_pos"].as<std::vector<float>>();
+        const auto & ids = loader->layout().hand_joint_ids;
+        for (size_t k = 0; k < ids.size(); ++k) {
+            joint_pos[ids[k]] = k < hand_default.size() ? hand_default[k] : 0.0f;
+        }
+    }
     data.insert(data.end(), joint_pos.data(), joint_pos.data() + joint_pos.size());
     return data;
 }
@@ -86,8 +98,8 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
 {
     auto loader = State_UmtMimic::motion;
 
-    const Eigen::Quaternionf real_quat_w = robot_anchor_quat_w(env);
-    const Eigen::Quaternionf ref_quat_w  = init_quat * loader->anchor_quaternion();
+    const Eigen::Quaternionf real_quat_w = umt::robot_anchor_quat_w(env);
+    const Eigen::Quaternionf ref_quat_w  = umt::init_quat * loader->anchor_quaternion();
 
     const Eigen::Matrix3f rot = (real_quat_w.conjugate() * ref_quat_w).toRotationMatrix();
 
@@ -186,6 +198,9 @@ State_UmtMimic::State_UmtMimic(int state_mode, std::string state_string)
     if (cfg["end_state"]) {
         end_state = cfg["end_state"].as<std::string>();
     }
+    if (cfg["align_z"]) {
+        align_z_ = cfg["align_z"].as<bool>();
+    }
     if (cfg["action_delay_ms"]) {
         action_delay_ms_ = cfg["action_delay_ms"].as<float>();
         if (action_delay_ms_ > 0.0f) {
@@ -258,10 +273,18 @@ void State_UmtMimic::enter()
         auto sleepTill = start + dt;
 
         motion->update(time_range_[0]);
-        auto ref_yaw = isaaclab::yawQuaternion(motion->anchor_quaternion()).toRotationMatrix();
-        auto robot_yaw = isaaclab::yawQuaternion(robot_anchor_quat_w(env.get())).toRotationMatrix();
-        init_quat = robot_yaw * ref_yaw.transpose();
+        umt::align_clip_to_robot(env.get(), motion->anchor_quaternion(), motion->anchor_position(), align_z_);
         env->reset();
+        {
+            const auto & data = env->robot->data;
+            const Eigen::Vector3f ap = umt::robot_anchor_pos_w(env.get());
+            const Eigen::Vector3f init_pos = umt::init_pos;
+            const auto err = isaaclab::mdp::motion_anchor_pos_b(env.get(), YAML::Node());
+            spdlog::info("UMT enter: odom {} (age {:.0f} ms) pelvis_imu [{:.3f} {:.3f} {:.3f}] -> torso anchor [{:.3f} {:.3f} {:.3f}]; "
+                         "clip offset [{:.3f} {:.3f} {:.3f}]; motion_anchor_pos_b [{:.3f} {:.3f} {:.3f}]",
+                         data.has_odom ? "yes" : "no", data.odom_age_ms, data.root_pos_w.x(), data.root_pos_w.y(), data.root_pos_w.z(),
+                         ap.x(), ap.y(), ap.z(), init_pos.x(), init_pos.y(), init_pos.z(), err[0], err[1], err[2]);
+        }
 
         while (policy_thread_running)
         {
@@ -331,6 +354,11 @@ void State_UmtMimic::run()
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
-    // TODO(dex3): publish motion->hand_joint_pos() on the Dex3 hand command
-    // topics once the hands are mounted (UMT keeps them at the default pose).
+    // Dex3 fingers follow the clip's reference directly (no policy residual);
+    // for the body-only UMT clips that is the frozen open pose. Published by
+    // the Dex3Hands thread on rt/dex3/<side>/cmd.
+    if (dex3_hands().enabled()) {
+        const Eigen::VectorXf hand_ref = motion->hand_joint_pos();
+        dex3_hands().set_targets(hand_ref.data(), static_cast<int>(hand_ref.size()));
+    }
 }

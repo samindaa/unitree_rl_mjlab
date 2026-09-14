@@ -36,6 +36,14 @@ struct ArticulationData
 
     Eigen::Quaternionf root_quat_w;
 
+    // State estimate (sources/odom_source.h), valid when has_odom: position
+    // of the pelvis IMU site in the world and its linear velocity in the
+    // site frame (mjlab robot/imu_lin_vel). Not derivable from lowstate.
+    Eigen::Vector3f root_pos_w = Eigen::Vector3f::Zero();
+    Eigen::Vector3f root_lin_vel_b = Eigen::Vector3f::Zero();
+    bool has_odom = false;
+    float odom_age_ms = 1e9f;
+
     std::vector<float> joint_ids_map;
 
     unitree::common::UnitreeJoystick* joystick = nullptr;

@@ -5,9 +5,10 @@
 // Mirrors smp_v2 task `Umt-Tracking-G1-No-State-Estimation`
 // (smp_v2/src/tasks/umt): ZEST-style residual-on-reference tracking of a
 // body-only clip on the G1+Dex3 entity (43 joints, 46 bodies). The policy
-// observes / actuates the 29 body joints only; the 14 Dex3 finger joints are
-// frozen at the clip's default pose (no hand command is sent yet — hook in
-// `MotionLoader_::hand_joint_pos()` when the Dex3 hands arrive).
+// observes / actuates the 29 body joints only; the 14 Dex3 finger joints
+// follow the clip's reference (`MotionLoader_::hand_joint_pos()`, frozen at
+// the open pose in the UMT clips) through the Dex3Hands publisher
+// (Dex3Hands.h), with no policy residual.
 //
 // Actor observation (154, in this order):
 //   zest_ref            55 = root z(1) + roll/pitch(2) + anchor lin vel(3)
@@ -22,6 +23,7 @@
 // Action (29): q_cmd = q_ref[body_joint] + scale * a   (ReferenceJointPositionAction)
 
 #include "FSM/State_RLBase.h"
+#include "Dex3Hands.h"
 #include <chrono>
 #include <cnpy.h>
 #include <deque>
@@ -41,6 +43,7 @@ public:
         if (policy_thread.joinable()) {
             policy_thread.join();
         }
+        dex3_hands().set_open_pose();
         probe_dump_();
     }
 
@@ -69,6 +72,12 @@ private:
     // q_cmd records the UNDELAYED policy output; the delay acts downstream.
     float action_delay_ms_ = 0.0f;
     std::deque<std::pair<std::chrono::steady_clock::time_point, std::vector<float>>> delay_buf_;
+
+    // motion_anchor_pos_b (needs the odom source): at enter() the clip's
+    // world frame is yaw-aligned (init_quat) AND translated so its anchor
+    // starts on the robot's anchor in xy; z stays absolute unless
+    // `align_z: true` (the estimator's z origin is the ground in sim).
+    bool align_z_ = false;
 };
 
 
@@ -167,6 +176,7 @@ public:
         }
 
         root_positions.clear();
+        anchor_positions.clear();
         anchor_quaternions.clear();
         anchor_lin_velocities.clear();
         anchor_ang_velocities.clear();
@@ -192,6 +202,7 @@ public:
             root_positions.push_back(read_vec3(body_pos_w.data<float>(), i, stride_pos, layout_.root_body_index));
             root_quaternions.push_back(read_quat(body_quat_w.data<float>(), i, stride_quat, layout_.root_body_index));
 
+            anchor_positions.push_back(read_vec3(body_pos_w.data<float>(), i, stride_pos, layout_.anchor_body_index));
             anchor_quaternions.push_back(read_quat(body_quat_w.data<float>(), i, stride_quat, layout_.anchor_body_index));
             anchor_lin_velocities.push_back(read_vec3(body_lin_vel_w.data<float>(), i, stride_lin, layout_.anchor_body_index));
             anchor_ang_velocities.push_back(read_vec3(body_ang_vel_w.data<float>(), i, stride_ang, layout_.anchor_body_index));
@@ -212,6 +223,7 @@ public:
     // --- per-frame accessors (current frame) ---
     Eigen::Vector3f root_position() const { return root_positions[frame]; }
     Eigen::Quaternionf root_quaternion() const { return root_quaternions[frame]; }
+    Eigen::Vector3f anchor_position() const { return anchor_positions[frame]; }
     Eigen::Quaternionf anchor_quaternion() const { return anchor_quaternions[frame]; }
     Eigen::Vector3f anchor_lin_vel_w() const { return anchor_lin_velocities[frame]; }
     Eigen::Vector3f anchor_ang_vel_w() const { return anchor_ang_velocities[frame]; }
@@ -235,6 +247,7 @@ public:
     int frame;
     std::vector<Eigen::Vector3f> root_positions;
     std::vector<Eigen::Quaternionf> root_quaternions;
+    std::vector<Eigen::Vector3f> anchor_positions;
     std::vector<Eigen::Quaternionf> anchor_quaternions;
     std::vector<Eigen::Vector3f> anchor_lin_velocities;
     std::vector<Eigen::Vector3f> anchor_ang_velocities;

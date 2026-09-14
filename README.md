@@ -197,7 +197,12 @@ Launch the simulator (note that a gamepad must be connected):
 ./simulate/build/unitree_mujoco
 ```
 
-You can select the corresponding robot in `simulate/config`
+You can select the corresponding robot in `simulate/config`. The default is
+the G1 with Dex3-1 hands (`scene_g1_dex3.xml`, for `deploy/robots/g1_dex3`);
+switch `robot_scene` to `scene_g1.xml` for the rubber-hand G1 controllers.
+`scene_g1_dex3.xml` is generated — after editing `scene_g1.xml` or the vendored
+hand MJCFs under `src/assets/robots/unitree_g1/xmls/dex3_1/`, run
+`uv run python scripts/make_g1_dex3_scene.py`.
 
 Launch the simulation control program:
 

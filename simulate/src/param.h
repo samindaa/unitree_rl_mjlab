@@ -3,6 +3,7 @@
 #include <iostream>
 #include <boost/program_options.hpp>
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -38,6 +39,30 @@ inline struct SimulationConfig
     // 0 disables it.
     int state_tap_port = 9870;
 
+    // State estimate stream (msgs/stream_msgs.h): pose of `odom_site` in the
+    // world and its site-frame twist, published every `odom_divider` bridge
+    // ticks (bridge runs at 1 kHz).
+    int odom_enable = 1;
+    std::string odom_topic = "rt/odom_pelvis";
+    std::string odom_site = "imu_in_pelvis";
+    int odom_divider = 2;
+
+    // Depth camera stream (simulate/src/depth_camera.h). Silently inactive
+    // when the scene has no camera named `camera_name`.
+    struct DepthCameraConfig
+    {
+        int enable = 1;
+        std::string gl = "egl";      // "egl" (GPU device, headless-capable) or "glfw" (hidden window)
+        std::string camera_name = "depth_camera";
+        std::string topic = "rt/depth_camera";
+        int width = 64;
+        int height = 36;
+        double hz = 30.0;
+        double delay_ms = 0.0;       // sim2sim latency injection
+        std::string dump_dir = "";   // write every `dump_every`-th frame as 16-bit PNG + sidecar
+        int dump_every = 0;
+    } depth_camera;
+
     void load_from_yaml(const std::string &filename)
     {
         auto cfg = YAML::LoadFile(filename);
@@ -69,6 +94,22 @@ inline struct SimulationConfig
             }
             if(cfg["state_tap_port"]) {
                 state_tap_port = cfg["state_tap_port"].as<int>();
+            }
+            if(cfg["odom_enable"]) odom_enable = cfg["odom_enable"].as<int>();
+            if(cfg["odom_topic"]) odom_topic = cfg["odom_topic"].as<std::string>();
+            if(cfg["odom_site"]) odom_site = cfg["odom_site"].as<std::string>();
+            if(cfg["odom_divider"]) odom_divider = std::max(1, cfg["odom_divider"].as<int>());
+            if(auto dc = cfg["depth_camera"]) {
+                if(dc["enable"]) depth_camera.enable = dc["enable"].as<int>();
+                if(dc["gl"]) depth_camera.gl = dc["gl"].as<std::string>();
+                if(dc["camera_name"]) depth_camera.camera_name = dc["camera_name"].as<std::string>();
+                if(dc["topic"]) depth_camera.topic = dc["topic"].as<std::string>();
+                if(dc["width"]) depth_camera.width = dc["width"].as<int>();
+                if(dc["height"]) depth_camera.height = dc["height"].as<int>();
+                if(dc["hz"]) depth_camera.hz = dc["hz"].as<double>();
+                if(dc["delay_ms"]) depth_camera.delay_ms = dc["delay_ms"].as<double>();
+                if(dc["dump_dir"]) depth_camera.dump_dir = dc["dump_dir"].as<std::string>();
+                if(dc["dump_every"]) depth_camera.dump_every = dc["dump_every"].as<int>();
             }
         }
         catch(const std::exception& e)

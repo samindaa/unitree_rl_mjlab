@@ -3,6 +3,10 @@
 #include "FSM/State_FixStand.h"
 #include "FSM/State_RLBase.h"
 #include "State_UmtMimic.h"
+#include "State_HiphiStudent.h"
+#include "Dex3Hands.h"
+#include "sources/odom_source.h"
+#include "sources/depth_source.h"
 
 std::unique_ptr<LowCmd_t> FSMState::lowcmd = nullptr;
 std::shared_ptr<LowState_t> FSMState::lowstate = nullptr;
@@ -25,6 +29,35 @@ void init_fsm_state()
     spdlog::info("Connected to robot.");
 }
 
+// Streamed inputs (msgs/stream_msgs.h): the state estimate feeds
+// ArticulationData (base_lin_vel / motion_anchor_pos_b), the depth cameras
+// feed the camera_depth observation. Created before the FSM so states whose
+// deploy.yaml uses those terms find them at construction.
+void init_sources(const YAML::Node& cfg)
+{
+    if (!cfg) return;
+    if (auto odom = cfg["odom"]; odom && odom["enable"].as<bool>(false)) {
+        const auto topic = odom["topic"].as<std::string>(unitree_rl::msgs::kOdomTopic);
+        const auto timeout = odom["timeout_ms"].as<uint32_t>(100);
+        unitree_rl::odom_source() = std::make_shared<unitree_rl::OdomSource>(topic, timeout);
+        spdlog::info("Source odom: {} (timeout {} ms)", topic, timeout);
+    }
+    if (auto depth = cfg["depth"]) {
+        for (auto it = depth.begin(); it != depth.end(); ++it) {
+            const auto name = it->first.as<std::string>();
+            const auto node = it->second;
+            if (!node["enable"].as<bool>(true)) continue;
+            const auto topic = node["topic"].as<std::string>(unitree_rl::msgs::kDepthTopic);
+            const auto timeout = node["timeout_ms"].as<uint32_t>(200);
+            auto src = std::make_shared<unitree_rl::DepthSource>(topic, timeout);
+            src->set_expected_size(node["width"].as<uint32_t>(unitree_rl::msgs::kDepthWidth),
+                                   node["height"].as<uint32_t>(unitree_rl::msgs::kDepthHeight));
+            unitree_rl::depth_sources()[name] = src;
+            spdlog::info("Source depth '{}': {} {}x{} (timeout {} ms)", name, topic, src->width(), src->height(), timeout);
+        }
+    }
+}
+
 int main(int argc, char** argv)
 {
     // Load parameters
@@ -38,13 +71,16 @@ int main(int argc, char** argv)
 
     init_fsm_state();
 
-    // The body is still the 29dof G1; the Dex3 hands live on their own DDS
-    // topics and are not driven by this controller yet (see State_UmtMimic.h).
+    // The body is the 29dof G1 on rt/lowcmd; the Dex3 hands live on their own
+    // DDS topics and are driven by the Dex3Hands publisher (see Dex3Hands.h).
     FSMState::lowcmd->msg_.mode_machine() = 5; // 29dof
     if(!FSMState::lowcmd->check_mode_machine(FSMState::lowstate)) {
         spdlog::critical("Unmatched robot type.");
         exit(-1);
     }
+
+    dex3_hands().start(param::config["dex3"]);
+    init_sources(param::config["sources"]);
 
     // Initialize FSM
     auto fsm = std::make_unique<CtrlFSM>(param::config["FSM"]);
@@ -52,7 +88,7 @@ int main(int argc, char** argv)
 
     std::cout << "Press [L2 + Up] to enter FixStand mode.\n";
     std::cout << "And then press [R2 + A] to start controlling the robot.\n";
-    std::cout << "And then press [R1 + A] to start the UMT motion.\n";
+    std::cout << "And then press [R1 + A] to start the UMT motion, [R1 + B] the hiphi student.\n";
 
     while (true)
     {

@@ -22,3 +22,12 @@ cc_binary(
     srcs = ["bench_umt.cpp"],
     deps = ["//:isaaclab_core"],
 )
+
+cc_binary(
+    name = "topic_probe",
+    srcs = ["tools/topic_probe.cpp"],
+    deps = [
+        "//:isaaclab_core",
+        "//thirdparty/cnpy",
+    ],
+)
