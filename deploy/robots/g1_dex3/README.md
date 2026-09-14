@@ -85,6 +85,7 @@ cd ~/third_party/smp_v2 && uv run scripts/rollout_hiphi_student.py \
 **Stream diagnostics**:
 
 ```bash
+uv run python scripts/sim_viser_mirror.py     # browser viewer: robot + a live panel of the depth frames the controller receives
 deploy/robots/g1_dex3/build/topic_probe -n lo -s 5 -d /tmp/probe.npz      # rates / ages while the sim runs
 uv run python scripts/check_depth_stream.py --probe-npz /tmp/probe.npz
 # pixel-level check: set depth_camera.dump_dir/dump_every in simulate/config.yaml, run the sim, then

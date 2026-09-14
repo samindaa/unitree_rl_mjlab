@@ -33,6 +33,11 @@
 #include <mujoco/mujoco.h>
 #include <unitree/dds_wrapper/common/Publisher.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -128,7 +133,12 @@ public:
         double delay_ms = 0.0;
         std::string dump_dir;
         int dump_every = 0;
+        // UDP tap for scripts/sim_viser_mirror.py (0 = off): every published
+        // frame as one datagram: uint32 magic "MJDP" (0x4D4A4450), uint32
+        // width, uint32 height, double time, uint16 depth_mm[height*width].
+        int tap_port = 0;
     };
+    static constexpr uint32_t kTapMagic = 0x4D4A4450;
 
     // `model` / `data` are the simulator's (reloadable) globals; `mtx` is the
     // simulator's model mutex. `window` is a hidden GLFW window for the glfw
@@ -151,10 +161,18 @@ public:
     {
         running_ = false;
         if (thread_.joinable()) thread_.join();
+        if (tap_fd_ >= 0) close(tap_fd_);
     }
 
     void start()
     {
+        if (cfg_.tap_port > 0) {
+            tap_fd_ = socket(AF_INET, SOCK_DGRAM, 0);
+            std::memset(&tap_addr_, 0, sizeof(tap_addr_));
+            tap_addr_.sin_family = AF_INET;
+            tap_addr_.sin_port = htons(static_cast<uint16_t>(cfg_.tap_port));
+            tap_addr_.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        }
         pub_ = std::make_unique<Pub_t>(cfg_.topic);
         unitree_rl::msgs::init_depth_image(pub_->msg_, cfg_.width, cfg_.height);
         running_ = true;
@@ -330,8 +348,24 @@ private:
                 unitree_rl::msgs::write_depth_image(pub_->msg_, pending_.front().t, pending_.front().mm.data());
                 pub_->unlockAndPublish();
             }
+            tap_send(pending_.front());
             pending_.pop_front();
         }
+    }
+
+    void tap_send(const Pending& p)
+    {
+        if (tap_fd_ < 0) return;
+        const uint32_t w = cfg_.width, h = cfg_.height;
+        std::vector<char> buf(3 * sizeof(uint32_t) + sizeof(double) + p.mm.size() * sizeof(uint16_t));
+        char* out = buf.data();
+        std::memcpy(out, &kTapMagic, 4); out += 4;
+        std::memcpy(out, &w, 4); out += 4;
+        std::memcpy(out, &h, 4); out += 4;
+        std::memcpy(out, &p.t, 8); out += 8;
+        std::memcpy(out, p.mm.data(), p.mm.size() * sizeof(uint16_t));
+        ::sendto(tap_fd_, buf.data(), buf.size(), MSG_DONTWAIT,
+                 reinterpret_cast<const sockaddr*>(&tap_addr_), sizeof(tap_addr_));
     }
 
     // 16-bit grey PNG (big-endian samples, as PNG requires) + a sidecar with
@@ -382,6 +416,9 @@ private:
     }
     int stat_n_ = 0;
     double stat_lock_ = 0.0, stat_render_ = 0.0, stat_read_ = 0.0;
+
+    int tap_fd_ = -1;
+    sockaddr_in tap_addr_{};
 
     std::unique_ptr<Pub_t> pub_;
     std::atomic<bool> running_{false};

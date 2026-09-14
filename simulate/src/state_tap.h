@@ -15,7 +15,9 @@
 //
 // The companion CommandTap listens on state_tap_port + 1 for key commands
 // (magic "MJKY" + one byte), so the mirror can drive the keyboard joystick,
-// the elastic band, and simulation reset remotely.
+// the elastic band, and simulation reset remotely. The depth camera streamer
+// (depth_camera.h) sends its published frames to state_tap_port + 2 (magic
+// "MJDP") so the mirror can show what the policy sees.
 
 #include <arpa/inet.h>
 #include <netinet/in.h>

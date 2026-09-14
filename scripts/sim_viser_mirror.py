@@ -5,6 +5,8 @@ GPU-backed display (e.g. over Chrome Remote Desktop), which is slow and drags
 the physics thread through the shared mutex. This script is a *passive* viewer:
 the simulator streams (time, qpos) datagrams to 127.0.0.1:<state_tap_port>
 (see `state_tap_port` in simulate/config.yaml and simulate/src/state_tap.h),
+and the depth camera streamer sends its published frames to port + 2, shown
+in a "Depth camera (policy input)" panel exactly as the controller sees them,
 and this process renders them with viser — all pixels are drawn by the
 browser's WebGL, so nothing OpenGL runs on this machine.
 
@@ -36,6 +38,7 @@ from pathlib import Path
 from threading import Lock, Thread
 
 import mujoco
+import numpy as np
 import tyro
 import viser
 import yaml
@@ -46,6 +49,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MAGIC = 0x4D4A5150  # "MJQP", see simulate/src/state_tap.h
 HEADER = struct.Struct("<IId")  # magic, nq, time
 COMMAND_MAGIC = struct.pack("<I", 0x4D4A4B59)  # "MJKY", command tap
+DEPTH_MAGIC = 0x4D4A4450  # "MJDP", depth tap (state tap port + 2), see simulate/src/depth_camera.h
+DEPTH_HEADER = struct.Struct("<IIId")  # magic, width, height, time
+DEPTH_CUTOFF_M = 3.0  # training normalisation (camera_depth cutoff_distance)
 
 
 @dataclass(frozen=True)
@@ -92,6 +98,47 @@ class TapReceiver:
         self.qpos = qpos
         self.sim_time = sim_time
         self.count += 1
+
+
+class DepthTapReceiver:
+  """Keeps the latest depth frame (uint16 mm, row 0 = top) from the depth tap."""
+
+  def __init__(self, port: int):
+    self.lock = Lock()
+    self.frame = None
+    self.sim_time = 0.0
+    self.count = 0
+    self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    self._sock.bind(("127.0.0.1", port))
+    self._sock.settimeout(0.5)
+    Thread(target=self._run, daemon=True).start()
+
+  def _run(self) -> None:
+    while True:
+      try:
+        packet = self._sock.recv(65536)
+      except TimeoutError:
+        continue
+      if len(packet) < DEPTH_HEADER.size:
+        continue
+      magic, width, height, sim_time = DEPTH_HEADER.unpack_from(packet)
+      if magic != DEPTH_MAGIC or len(packet) != DEPTH_HEADER.size + 2 * width * height:
+        continue
+      frame = np.frombuffer(packet, dtype="<u2", count=width * height, offset=DEPTH_HEADER.size)
+      with self.lock:
+        self.frame = frame.reshape(height, width).copy()
+        self.sim_time = sim_time
+        self.count += 1
+
+
+def depth_to_rgb(frame_mm: np.ndarray, upscale: int = 6) -> np.ndarray:
+  """Policy-input view: clamp(d, 0.01, cutoff)/cutoff as grey (near = bright),
+  no-return pixels (0 mm) in red; nearest-neighbour upscaled for the panel."""
+  d = np.clip(frame_mm.astype(np.float32) * 1e-3, 0.01, DEPTH_CUTOFF_M) / DEPTH_CUTOFF_M
+  grey = ((1.0 - d) * 255).astype(np.uint8)
+  rgb = np.stack([grey, grey, grey], axis=-1)
+  rgb[frame_mm == 0] = (200, 30, 30)
+  return np.repeat(np.repeat(rgb, upscale, axis=0), upscale, axis=1)
 
 
 class CommandSender:
@@ -167,13 +214,17 @@ def main(cfg: MirrorConfig) -> None:
 
   receiver = TapReceiver(tap_port, model.nq)
   commands = CommandSender(tap_port + 1)
-  print(f"Listening for simulator state on udp://127.0.0.1:{tap_port}")
+  depth = DepthTapReceiver(tap_port + 2)
+  print(f"Listening for simulator state on udp://127.0.0.1:{tap_port}, depth on :{tap_port + 2}")
 
   server = viser.ViserServer(port=cfg.port)
   scene = ViserMujocoScene(server, model, num_envs=1)
   scene.create_scene_gui()
   with server.gui.add_folder("Simulator"):
     status_md = server.gui.add_markdown("waiting for state tap ...")
+  with server.gui.add_folder("Depth camera (policy input)"):
+    depth_img = server.gui.add_image(np.zeros((36 * 6, 64 * 6, 3), dtype=np.uint8), label="rt/depth_camera")
+    depth_md = server.gui.add_markdown("waiting for depth tap ...")
   build_command_gui(server, commands, sim_cfg)
 
   # Show the default pose until the first packet arrives.
@@ -183,6 +234,8 @@ def main(cfg: MirrorConfig) -> None:
 
   period = 1.0 / cfg.fps
   last_count = 0
+  last_depth_count = 0
+  shown_depth_count = 0
   last_stats_time = time.monotonic()
   while True:
     tic = time.monotonic()
@@ -190,6 +243,13 @@ def main(cfg: MirrorConfig) -> None:
       qpos = receiver.qpos
       sim_time = receiver.sim_time
       count = receiver.count
+    with depth.lock:
+      frame = depth.frame
+      depth_count = depth.count
+      depth_time = depth.sim_time
+    if frame is not None and depth_count != shown_depth_count:
+      depth_img.image = depth_to_rgb(frame)
+      shown_depth_count = depth_count
 
     if qpos is not None:
       data.qpos[:] = qpos
@@ -207,6 +267,18 @@ def main(cfg: MirrorConfig) -> None:
         status_md.content = (
           f"state tap: **{tap_hz:.0f} Hz** \nsim time: **{sim_time:.1f} s**"
         )
+      depth_hz = (depth_count - last_depth_count) / (now - last_stats_time)
+      if depth_count == 0:
+        depth_md.content = "waiting for depth tap ... (depth_camera.enable in simulate/config.yaml?)"
+      else:
+        valid = frame[frame > 0]
+        rng = f"{valid.min() / 1000:.2f}..{valid.max() / 1000:.2f} m" if valid.size else "no returns"
+        depth_md.content = (
+          f"**{depth_hz:.0f} Hz**, t {depth_time:.1f} s, {frame.shape[1]}x{frame.shape[0]}, "
+          f"{100 * valid.size / frame.size:.0f}% valid, {rng}  \n"
+          f"grey = clamp(d, 0.01, {DEPTH_CUTOFF_M:.0f} m) / {DEPTH_CUTOFF_M:.0f} m (near = bright), red = no return"
+        )
+      last_depth_count = depth_count
       last_count = count
       last_stats_time = now
 

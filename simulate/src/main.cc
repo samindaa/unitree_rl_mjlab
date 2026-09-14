@@ -766,6 +766,8 @@ int main(int argc, char **argv)
       cfg.delay_ms = dc.delay_ms;
       cfg.dump_dir = dc.dump_dir;
       cfg.dump_every = dc.dump_every;
+      // frames also go to the viser mirror's depth tap (state tap port + 2)
+      cfg.tap_port = param::config.state_tap_port > 0 ? param::config.state_tap_port + 2 : 0;
       depth_streamer = std::make_unique<DepthCameraStreamer>(depth_window, &m, &d, &sim->mtx, cfg);
     }
   }
