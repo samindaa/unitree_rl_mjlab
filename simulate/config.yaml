@@ -32,7 +32,7 @@ keyboard_map:
   "1": "LT + up"  # Passive  -> FixStand
   "2": "RT + A"   # FixStand -> Velocity  (also Mimic -> Velocity)
   "3": "RB + A"   # Velocity -> Mimic
-  "4": "RB + B"   # Velocity -> HiphiStudent (g1_dex3)
+  "4": "RB + B"   # Velocity -> HiphiEaseIn -> HiphiStudent -> HiphiEaseOut (g1_dex3)
   "0": "LT + B"   # any      -> Passive (damping)
 keyboard_press_duration: 0.3 # Seconds a chord stays asserted after a key press
 keyboard_axis_step: 0.1 # Velocity command increment per w/a/s/d/q/e press
@@ -58,6 +58,28 @@ odom_enable: 1
 odom_topic: "rt/odom_pelvis"
 odom_site: "imu_in_pelvis"
 odom_divider: 2 # bridge ticks (1 kHz) per message -> 500 Hz
+# State-estimator randomization, mirroring smp_v2 EstimatorNoiseCfg
+# (tasks/hiphi_tracking_multi_distill/env_cfg.py; training defaults in the
+# comments): a uniform bias in [-bound, +bound] per axis drawn at start (and
+# every bias_redraw_s if > 0 — training redraws per episode) plus Gaussian
+# noise per message, position in the pelvis (IMU site) frame, velocity in the
+# site frame. All 0 = clean (the deployment condition).
+# Clean (deployment condition) — swap the comment markers on the two blocks:
+#odom_randomize:
+#  pos_bias_m: 0.0
+#  vel_bias: 0.0
+#  pos_noise_m: 0.0
+#  vel_noise: 0.0
+#  bias_redraw_s: 0
+#  seed: 0            # 0 = random
+# Training values (smp_v2 EstimatorNoiseCfg):
+odom_randomize:
+  pos_bias_m: 0.01
+  vel_bias: 0.05
+  pos_noise_m: 0.002
+  vel_noise: 0.02
+  bias_redraw_s: 0
+  seed: 0            # 0 = random
 
 # Depth camera: renders the scene camera `camera_name` (scene_g1_dex3.xml,
 # head-mounted with the training camera's pose/fovy) off screen and publishes
@@ -68,9 +90,29 @@ depth_camera:
   gl: "egl" # "egl": own context on the GPU device (works headless, hardware GL on Wayland sessions); "glfw": hidden window
   camera_name: "depth_camera"
   topic: "rt/depth_camera"
-  width: 64
-  height: 36
+  width: 80   # must match the deployed student's depth frame (hiphi_student v1: 60x80; v0: 36x64)
+  height: 60
   hz: 30
   delay_ms: 0 # sim2sim camera-latency injection; keep 0 unless sweeping
   dump_dir: "" # e.g. /tmp/depth_dump: every dump_every-th frame as 16-bit PNG + qpos sidecar
   dump_every: 0
+  # Depth randomization, mirroring smp_v2 DepthRandomizationCfg /
+  # mdp.RandomizedCameraDepth (LadderMan recipe; training defaults in the
+  # comments): integer image shift drawn at start (and every shift_redraw_s
+  # if > 0 — training redraws per episode), then Gaussian noise, then pixel
+  # dropout to 0, per published frame. Object masking needs scene objects
+  # and is not available here. All 0 = clean.
+  # Clean (deployment condition) — swap the comment markers on the two blocks:
+  #randomize:
+  #  noise_std_m: 0.0
+  #  dropout_p: 0.0
+  #  shift_px: 0
+  #  shift_redraw_s: 0
+  #  seed: 0            # 0 = random
+  # Training values (smp_v2 DepthRandomizationCfg):
+  randomize:
+    noise_std_m: 0.005
+    dropout_p: 0.05
+    shift_px: 2
+    shift_redraw_s: 0
+    seed: 0            # 0 = random

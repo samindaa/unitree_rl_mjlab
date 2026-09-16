@@ -31,8 +31,8 @@ sources:
     depth_camera:
       enable: true
       topic: "rt/depth_camera"
-      width: 64
-      height: 36
+      width: 80             # must match the student (v1: 60x80, 2 m cutoff; v0: 36x64, 3 m)
+      height: 60
       timeout_ms: 200
 
 FSM:
@@ -51,6 +51,12 @@ FSM:
     HiphiStudent:
       id: 6
       type: HiphiStudent
+    HiphiEaseIn:
+      id: 7
+      type: HiphiEaseIn
+    HiphiEaseOut:
+      id: 8
+      type: HiphiEaseOut
 
 
   Passive:
@@ -107,7 +113,7 @@ FSM:
     transitions:
       Passive: LT + B.on_pressed
       Umt: RB + A.on_pressed
-      HiphiStudent: RB + B.on_pressed
+      HiphiEaseIn: RB + B.on_pressed   # eased entry into the hiphi motion (HiphiEaseIn -> HiphiStudent -> HiphiEaseOut)
 
     policy_dir: config/policy/velocity
 
@@ -139,20 +145,42 @@ FSM:
     # hand_joint_ids: [22,23,24,25,26,27,28,36,37,38,39,40,41,42]
 
 
-  # Depth-distilled hiphi student on the frozen UMT base (State_HiphiStudent):
-  # needs sources.odom and sources.depth. First plumbing baseline: a pnp64
-  # clip's robot + hand reference only, no objects in the scene.
+  # Depth-distilled hiphi student on the frozen UMT base (HiphiStack.h):
+  # needs sources.odom and sources.depth. The stack config lives in this
+  # block; HiphiEaseIn / HiphiEaseOut share it. Normal flow:
+  #   Velocity --RB+B--> HiphiEaseIn --(blend done)--> HiphiStudent --(clip end)--> HiphiEaseOut (hold)
   HiphiStudent:
     transitions:
       Passive: LT + B.on_pressed
       Velocity: RT + A.on_pressed
+    end_state: HiphiEaseOut      # where the clip end goes (was Velocity: a jump, and it drops the grasp)
+    residual_fade_s: 0.2         # student residual faded in over this after the eased entry
 
     motion_file: config/policy/hiphi_student/v0/params/pnp64_9204_13_1520609083.npz
     umt_policy_dir: config/policy/hiphi_umt_base/v0/
-    student_policy_dir: config/policy/hiphi_student/v0/
+    student_policy_dir: config/policy/hiphi_student/v1/   # v1 = 289575085 60x80 rand student; v0 = 36x64
     depth_sensor: depth_camera   # key under sources.depth
     time_start: 0.0
     time_end: 1000.0
-    end_state: Velocity
     align_z: false
     require_streams: true        # stale odom (>100 ms) / depth (>200 ms) for 0.5 s -> Velocity
+
+  # Eased entry: synthetic reference from the measured pose into the clip's
+  # first frame, UMT base only (pkl_to_csv.py recipe, online).
+  HiphiEaseIn:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RT + A.on_pressed
+    duration_s: 1.0
+    ease: in_cubic               # in_cubic (t^3, the reference recipe) | in_out_cubic (arrives at rest)
+    abort_joint_err: 0.6         # rad; tracking breakdown during the blend -> Passive
+
+  # Held exit: ease_out_cubic from the clip's last frame into the hold pose,
+  # then hold with zero reference velocities until the operator leaves.
+  HiphiEaseOut:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RT + A.on_pressed
+    duration_s: 1.0
+    hold_pose: last              # last (the clip's final frame) | default (deploy.yaml default pose, open fingers)
+    residual_fade_s: 0.2

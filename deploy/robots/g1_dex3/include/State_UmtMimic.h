@@ -126,6 +126,19 @@ public:
         update(0.0f);
     }
 
+    /// Empty in-memory clip (synthetic transitions, see HiphiStack): push
+    /// frames into the public vectors, then call finalize().
+    MotionLoader_(const Layout& layout, float dt_)
+    : dt(dt_), num_frames(0), num_joints(0), duration(0.0f), frame(0), layout_(layout) {}
+
+    void finalize()
+    {
+        num_frames = static_cast<int>(dof_positions.size());
+        num_joints = num_frames > 0 ? static_cast<int>(dof_positions[0].size()) : 0;
+        duration = num_frames * dt;
+        update(0.0f);
+    }
+
     void load_data_from_npz(const std::string& motion_file)
     {
         cnpy::npz_t npz_data = cnpy::npz_load(motion_file);

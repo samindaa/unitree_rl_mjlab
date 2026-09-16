@@ -76,7 +76,7 @@ and falls. Gamepad: `L2+Up`, `R2+A`, `R1+B` (student) / `R1+A` (UMT), `L2+B`.
 
 ```bash
 # deploy side: sim + controller + FSM sequence + probe summary (9 s in the student state)
-uv run python scripts/sim_e2e_hiphi_student.py 9
+uv run python scripts/sim_e2e_hiphi_student.py 16   # seconds after R1+B: ease-in 1 s + clip 11.4 s + hold
 # mjlab reference for the same clip (from smp_v2)
 cd ~/third_party/smp_v2 && uv run scripts/rollout_hiphi_student.py \
   --checkpoint logs/rsl_rl/g1_hiphi_umt_multi_v2_distill/2026-09-13_01-24-51_pnp64_res_v0/model_9999.pt --steps 450
@@ -153,6 +153,16 @@ design and validation: [`doc/plan_state_estimator_depth_streaming.md`](../../../
 | `rt/odom_pelvis` | `nav_msgs Odometry_` | pelvis IMU site pose in world; twist in the site frame (= mjlab `imu_lin_vel` / `imu_ang_vel`) | `unitree_mujoco` bridge, 500 Hz | to do (`odom_adapter`) |
 | `rt/depth_camera` | `sensor_msgs PointCloud2_` (organized, `UINT16 depth_mm`) | 64×36 planar z-depth, 0 = no return, row 0 = top | `unitree_mujoco` EGL render of `depth_camera`, 30 Hz | to do (`depth_camera_node`, D435i) |
 
+Both streams can be perturbed for sim-to-sim robustness tests with the same
+models and numbers the student trains with (smp_v2
+`DepthRandomizationCfg` / `EstimatorNoiseCfg` in
+`tasks/hiphi_tracking_multi_distill/env_cfg.py`): `depth_camera.randomize`
+(image shift, Gaussian noise, dropout to no-return) and `odom_randomize`
+(per-axis uniform bias + Gaussian noise on the site-frame position and
+velocity) in `simulate/config.yaml`; all zero = clean (the deployment
+condition), the training values are in the comments. Object masking needs
+scene objects and is not mirrored.
+
 Controller side ([`sources/odom_source.h`](../../include/sources/odom_source.h),
 [`sources/depth_source.h`](../../include/sources/depth_source.h)), configured
 under `sources:` in [`config/config.yaml`](config/config.yaml):
@@ -194,8 +204,36 @@ and a clip converted with `scripts/umt_bundle_to_deploy_npz.py <clip.npz>
 `Velocity` with `R1 + B`. Re-export the student with
 `smp_v2/scripts/export_student_onnx.py` (two named inputs).
 
+### Eased entry / held exit
+
+`Velocity --R1+B--> HiphiEaseIn --(blend done)--> HiphiStudent --(clip end)--> HiphiEaseOut (hold)`
+
+The three states share one [`HiphiStack`](include/HiphiStack.h) (envs, clip,
+alignment, policy thread), so the UMT's own action history and the hand
+targets stay continuous through the hand-overs; each state only selects the
+phase. `HiphiEaseIn` runs a synthetic reference from the robot's *measured*
+pose into the clip's first frame (`ease_in_cubic`, `duration_s` 1.0, LERP
+joints/positions, SLERP orientations, finite-difference velocities — the
+online form of `g1_spinkick_example/pkl_to_csv.py`'s padding) with the UMT
+base in the loop and no residual; `HiphiStudent` fades the residual in over
+`residual_fade_s`; `HiphiEaseOut` eases (`ease_out_cubic`) into the hold
+pose (`hold_pose: last | default`) and holds it with zero reference
+velocities, fingers frozen at their last targets (a grasp survives), until
+`L2+B` (Passive) or `R2+A` (Velocity). Config blocks `HiphiEaseIn` /
+`HiphiEaseOut` in [`config/config.yaml`](config/config.yaml); the direct
+`Velocity -> HiphiStudent` edge is gone.
+
+Measured in sim (v1 student, randomization on, 2026-09-16): the entry jump
+went from **1.2 rad/step** (frame 0 applied at once) to **0.10 rad/step**
+(the `t³` blend's arrival speed over a 1.54 rad gap; `ease: in_out_cubic`
+halves it), ease-in tracking error 0.05 rad, hand-over jumps 0.08 / 0.02
+rad/step, hold stable for the whole state (body error 0.07 rad, hand targets
+frozen). The only large jump left (1.2 rad/step, left ankle pitch, the UMT
+output itself, ~4 s into the clip) is mid-clip: the known deploy-only
+transient where the hands close on nothing — the object-scene follow-up.
+
 Sim-to-sim evaluation (headless, band lowered then released in `Velocity`):
-`uv run python scripts/sim_e2e_hiphi_student.py 9`; the mjlab reference for
+`uv run python scripts/sim_e2e_hiphi_student.py 16`; the mjlab reference for
 the same clip comes from `smp_v2/scripts/rollout_hiphi_student.py`. Baseline
 2026-09-14, clip `pnp64_9204_13_1520609083`, 9 s from the clip start, the
 deploy side with robot + hands only (no table / objects):
@@ -208,6 +246,18 @@ deploy side with robot + hands only (no table / objects):
 | body residual mean / max | 0.110 / 0.272 rad | 0.102 / 0.273 rad |
 | hand residual mean / max | 0.472 / 0.717 rad | 0.466 / 0.715 rad |
 | fell | no | no |
+
+v1 student (`289575085 … pnp64_res_rand_60x80_full`: distilled WITH the
+randomization, 60×80 depth, 2.0 m cutoff, object mask 0.1), same clip, 9 s,
+2026-09-16; the simulator ran with its depth + estimator randomization on:
+
+| | mjlab clean | mjlab `--randomize` | deploy in unitree_mujoco (randomized) |
+| --- | --- | --- | --- |
+| body \|q − q_ref\| mean / last 1 s | 0.080 / 0.077 rad | 0.072 / 0.066 rad | 0.091 / 0.087 rad |
+| hand \|q − q_ref\| mean | 0.445 rad | 0.450 rad | 0.457 rad |
+| Σ·π_umt mean / max | 0.156 / 1.09 rad | 0.153 / 0.94 rad | 0.180 / 2.05 rad |
+| body residual mean / max | 0.113 / 0.277 rad | 0.107 / 0.272 rad | 0.108 / 0.270 rad |
+| fell | no | no | no |
 
 The residual saturates on both sides (±0.27 rad body, ±0.72 rad fingers —
 the student squeezes at full authority with or without an object). The one

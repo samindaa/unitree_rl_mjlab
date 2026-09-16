@@ -768,6 +768,11 @@ int main(int argc, char **argv)
       cfg.dump_every = dc.dump_every;
       // frames also go to the viser mirror's depth tap (state tap port + 2)
       cfg.tap_port = param::config.state_tap_port > 0 ? param::config.state_tap_port + 2 : 0;
+      cfg.noise_std_m = dc.randomize.noise_std_m;
+      cfg.dropout_p = dc.randomize.dropout_p;
+      cfg.shift_px = dc.randomize.shift_px;
+      cfg.shift_redraw_s = dc.randomize.shift_redraw_s;
+      cfg.seed = dc.randomize.seed;
       depth_streamer = std::make_unique<DepthCameraStreamer>(depth_window, &m, &d, &sim->mtx, cfg);
     }
   }

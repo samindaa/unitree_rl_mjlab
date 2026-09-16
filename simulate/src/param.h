@@ -46,6 +46,19 @@ inline struct SimulationConfig
     std::string odom_topic = "rt/odom_pelvis";
     std::string odom_site = "imu_in_pelvis";
     int odom_divider = 2;
+    // State-estimator randomization (smp_v2 EstimatorNoiseCfg, applied to
+    // the published pose/twist): per-"episode" uniform bias bounds and
+    // per-message Gaussian noise, position in the site (pelvis) frame,
+    // velocity in the site frame. All 0 = clean.
+    struct OdomRandomizeConfig
+    {
+        double pos_bias_m = 0.0;
+        double vel_bias = 0.0;
+        double pos_noise_m = 0.0;
+        double vel_noise = 0.0;
+        double bias_redraw_s = 0.0;   // 0 = draw the bias once at start
+        unsigned seed = 0;            // 0 = random
+    } odom_randomize;
 
     // Depth camera stream (simulate/src/depth_camera.h). Silently inactive
     // when the scene has no camera named `camera_name`.
@@ -61,6 +74,16 @@ inline struct SimulationConfig
         double delay_ms = 0.0;       // sim2sim latency injection
         std::string dump_dir = "";   // write every `dump_every`-th frame as 16-bit PNG + sidecar
         int dump_every = 0;
+        // Depth randomization (smp_v2 DepthRandomizationCfg / RandomizedCameraDepth,
+        // LadderMan recipe): shift -> noise -> dropout, per published frame.
+        struct RandomizeConfig
+        {
+            double noise_std_m = 0.0;   // per-frame Gaussian noise on depth
+            double dropout_p = 0.0;     // per-pixel probability of reading 0 (no return)
+            int shift_px = 0;           // per-"episode" integer image shift bound
+            double shift_redraw_s = 0.0;  // 0 = draw the shift once at start
+            unsigned seed = 0;          // 0 = random
+        } randomize;
     } depth_camera;
 
     void load_from_yaml(const std::string &filename)
@@ -99,6 +122,14 @@ inline struct SimulationConfig
             if(cfg["odom_topic"]) odom_topic = cfg["odom_topic"].as<std::string>();
             if(cfg["odom_site"]) odom_site = cfg["odom_site"].as<std::string>();
             if(cfg["odom_divider"]) odom_divider = std::max(1, cfg["odom_divider"].as<int>());
+            if(auto r = cfg["odom_randomize"]) {
+                if(r["pos_bias_m"]) odom_randomize.pos_bias_m = r["pos_bias_m"].as<double>();
+                if(r["vel_bias"]) odom_randomize.vel_bias = r["vel_bias"].as<double>();
+                if(r["pos_noise_m"]) odom_randomize.pos_noise_m = r["pos_noise_m"].as<double>();
+                if(r["vel_noise"]) odom_randomize.vel_noise = r["vel_noise"].as<double>();
+                if(r["bias_redraw_s"]) odom_randomize.bias_redraw_s = r["bias_redraw_s"].as<double>();
+                if(r["seed"]) odom_randomize.seed = r["seed"].as<unsigned>();
+            }
             if(auto dc = cfg["depth_camera"]) {
                 if(dc["enable"]) depth_camera.enable = dc["enable"].as<int>();
                 if(dc["gl"]) depth_camera.gl = dc["gl"].as<std::string>();
@@ -110,6 +141,13 @@ inline struct SimulationConfig
                 if(dc["delay_ms"]) depth_camera.delay_ms = dc["delay_ms"].as<double>();
                 if(dc["dump_dir"]) depth_camera.dump_dir = dc["dump_dir"].as<std::string>();
                 if(dc["dump_every"]) depth_camera.dump_every = dc["dump_every"].as<int>();
+                if(auto r = dc["randomize"]) {
+                    if(r["noise_std_m"]) depth_camera.randomize.noise_std_m = r["noise_std_m"].as<double>();
+                    if(r["dropout_p"]) depth_camera.randomize.dropout_p = r["dropout_p"].as<double>();
+                    if(r["shift_px"]) depth_camera.randomize.shift_px = r["shift_px"].as<int>();
+                    if(r["shift_redraw_s"]) depth_camera.randomize.shift_redraw_s = r["shift_redraw_s"].as<double>();
+                    if(r["seed"]) depth_camera.randomize.seed = r["seed"].as<unsigned>();
+                }
             }
         }
         catch(const std::exception& e)

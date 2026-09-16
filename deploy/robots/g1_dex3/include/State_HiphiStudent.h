@@ -10,7 +10,7 @@
 //       motion_anchor_pos_b | motion_anchor_ori_b | base_lin_vel |
 //       base_ang_vel | projected_gravity | joint_pos_rel (29) |
 //       joint_vel_rel (29) | its own last action (29)
-//   student (196 + 1x36x64 depth -> 43):  zest_ref (unmasked) |
+//   student (196 + 1xHxW depth -> 43):  zest_ref (unmasked) |
 //       motion_anchor_ori_b | base_ang_vel | projected_gravity |
 //       joint_pos_rel over all 43 joints (entity order, fingers interleaved) |
 //       joint_vel_rel (43) | its own last action (43) ; camera_depth
@@ -20,78 +20,86 @@
 //   body (29, SDK order):  q = clamp(q_ref + SIGMA * pi_umt + res_scale * a[0:29], joint limits)
 //   hand (14, Dex3 order): q = clamp(q_ref_hand + hand_scale * a[29:43], joint limits)
 //
-// SIGMA (G1_ACTION_SCALE) and res_scale / hand_scale live in the two
-// deploy.yaml action terms (`umt_policy_dir`, `student_policy_dir`); the
-// joint limits in the student's deploy.yaml. Both networks' inputs come from
-// the streamed state estimate (rt/odom_pelvis) and depth image
-// (rt/depth_camera): without them the state refuses to run.
+// The stack itself (envs, clip, alignment, policy thread) lives in
+// HiphiStack, shared with the eased entry / exit states:
 //
-// Body targets go to rt/lowcmd like every other state; finger targets to the
-// Dex3Hands publisher.
+//   Velocity --RB+B--> HiphiEaseIn --(blend done)--> HiphiStudent --(clip end)--> HiphiEaseOut (hold)
+//
+// This state runs the clip phase. Entered from HiphiEaseIn it continues the
+// stack (UMT history, alignment, hand targets); entered directly it starts
+// fresh (aligns the clip to the robot and jumps to frame 0).
 
 #include "FSM/State_RLBase.h"
-#include "State_UmtMimic.h"  // MotionLoader_ (clip format / layout)
-#include "Dex3Hands.h"
+#include "HiphiStack.h"
 
-#include <array>
-#include <atomic>
-#include <mutex>
-#include <string>
-#include <vector>
-
-
-class State_HiphiStudent : public FSMState
+class State_HiphiBase : public FSMState
 {
 public:
-    State_HiphiStudent(int state_mode, std::string state_string);
+    State_HiphiBase(int state_mode, std::string state_string)
+    : FSMState(state_mode, state_string), stack_(HiphiStack::instance())
+    {
+        stack_.configure(param::config["FSM"]["HiphiStudent"]);
+        this->registered_checks.emplace_back(std::make_pair(
+            [&]()->bool{
+                if (!stack_.streams_stale()) return false;
+                spdlog::warn("{}: state estimate / depth stream stale, leaving", getStateString());
+                return true;
+            },
+            FSMStringMap.right.at("Velocity")));
+    }
 
-    void enter();
-    void run();
+    void run()
+    {
+        std::vector<float> body, hand;
+        if (!stack_.latest_commands(body, hand)) return;  // hold the previous targets until the first step
+        const auto & ids = stack_.joint_ids_map();
+        for (size_t i = 0; i < ids.size() && i < body.size(); i++) {
+            lowcmd->msg_.motor_cmd()[ids[i]].q() = body[i];
+        }
+        if (dex3_hands().enabled()) {
+            dex3_hands().set_targets(hand.data(), static_cast<int>(hand.size()));
+        }
+    }
+
+protected:
+    HiphiStack& stack_;
+};
+
+
+class State_HiphiStudent : public State_HiphiBase
+{
+public:
+    State_HiphiStudent(int state_mode, std::string state_string)
+    : State_HiphiBase(state_mode, state_string)
+    {
+        auto cfg = param::config["FSM"][state_string];
+        end_state_ = cfg["end_state"] ? cfg["end_state"].as<std::string>() : "HiphiEaseOut";
+        fade_ = parse_ease_config(cfg, HiphiStack::Easing::InCubic);
+        this->registered_checks.emplace_back(std::make_pair(
+            [&]()->bool{ return stack_.phase_done(); },
+            FSMStringMap.right.at(end_state_)));
+    }
+
+    void enter()
+    {
+        stack_.set_gains(*lowcmd);
+        const bool cont = stack_.last_phase() == HiphiStack::Phase::EaseIn && stack_.phase_done();
+        stack_.start(HiphiStack::Phase::Clip, cont, fade_);
+    }
+
     void exit()
     {
-        policy_thread_running = false;
-        if (policy_thread.joinable()) {
-            policy_thread.join();
+        const bool to_ease_out = stack_.phase_done();
+        stack_.stop();
+        if (!to_ease_out) {
+            dex3_hands().set_open_pose();
+            stack_.probe_dump();
         }
-        dex3_hands().set_open_pose();
-        probe_dump_();
     }
 
 private:
-    using MotionLoader_ = State_UmtMimic::MotionLoader_;
-
-    void compose_and_store_(double t);
-    void probe_dump_();
-
-    std::shared_ptr<MotionLoader_> motion_;
-    std::unique_ptr<isaaclab::ManagerBasedRLEnv> umt_env_;      // frozen base
-    std::unique_ptr<isaaclab::ManagerBasedRLEnv> student_env_;  // residual student
-
-    std::thread policy_thread;
-    bool policy_thread_running = false;
-    std::array<float, 2> time_range_;
-    bool align_z_ = false;
-    std::string depth_sensor_ = "depth_camera";
-    bool require_streams_ = true;
-    float odom_max_age_ms_ = 100.0f;
-    float depth_max_age_ms_ = 200.0f;
-    std::atomic<int> stale_steps_{0};
-
-    // Joint limits over all 43 joints in entity order (student deploy.yaml).
-    std::vector<float> limit_lo_, limit_hi_;
-
-    // Composed targets, written by the policy thread and read by run().
-    std::mutex cmd_mutex_;
-    std::vector<float> body_cmd_;  // 29, SDK order
-    std::vector<float> hand_cmd_;  // 14, left then right, Dex3 motor order
-    bool have_cmd_ = false;
-
-    // Probe (dumped as npz on exit): per policy step t, reference (43, entity
-    // order), UMT offset (29), scaled residual (43, [body|hand]), commanded
-    // targets (43, [body|hand]) and measured joints (43, [body|hand]).
-    std::vector<float> probe_t_, probe_ref_, probe_umt_, probe_res_, probe_cmd_, probe_q_;
-    std::string probe_path_;
+    std::string end_state_;
+    HiphiStack::EaseConfig fade_;
 };
-
 
 REGISTER_FSM(State_HiphiStudent)

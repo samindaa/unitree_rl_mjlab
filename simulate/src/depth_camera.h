@@ -47,6 +47,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -137,6 +138,15 @@ public:
         // frame as one datagram: uint32 magic "MJDP" (0x4D4A4450), uint32
         // width, uint32 height, double time, uint16 depth_mm[height*width].
         int tap_port = 0;
+        // Randomization (smp_v2 RandomizedCameraDepth, LadderMan recipe):
+        // integer shift (edge-replicated) drawn at start / every
+        // shift_redraw_s, then Gaussian noise, then dropout to 0 (no
+        // return), per published frame. All 0 = clean.
+        double noise_std_m = 0.0;
+        double dropout_p = 0.0;
+        int shift_px = 0;
+        double shift_redraw_s = 0.0;
+        unsigned seed = 0;
     };
     static constexpr uint32_t kTapMagic = 0x4D4A4450;
 
@@ -155,6 +165,8 @@ public:
         mjr_defaultContext(&con_);
         depth_.resize(static_cast<size_t>(cfg_.width) * cfg_.height);
         depth_mm_.resize(depth_.size());
+        rng_.seed(cfg_.seed != 0 ? cfg_.seed : std::random_device{}());
+        randomize_ = cfg_.noise_std_m > 0.0 || cfg_.dropout_p > 0.0 || cfg_.shift_px > 0;
     }
 
     ~DepthCameraStreamer()
@@ -271,6 +283,12 @@ private:
                   << " (fovy " << m->cam_fovy[cam_id_] << ", clip " << znear_ << ".." << zfar_ << " m"
                   << (cfg_.delay_ms > 0 ? ", delay " + std::to_string(cfg_.delay_ms) + " ms" : "")
                   << ")" << std::endl;
+        if (randomize_) {
+            std::cout << "depth_camera: RANDOMIZATION ON: noise " << cfg_.noise_std_m * 1e3 << " mm, dropout "
+                      << cfg_.dropout_p << ", shift +-" << cfg_.shift_px << " px"
+                      << (cfg_.shift_redraw_s > 0 ? " redrawn every " + std::to_string(cfg_.shift_redraw_s) + " s" : "")
+                      << std::endl;
+        }
         return true;
     }
 
@@ -329,6 +347,8 @@ private:
             }
         }
 
+        if (randomize_) randomize(t);
+
         ++seq_;
         if (cfg_.dump_every > 0 && seq_ % cfg_.dump_every == 0) dump(t);
 
@@ -350,6 +370,48 @@ private:
             }
             tap_send(pending_.front());
             pending_.pop_front();
+        }
+    }
+
+    // smp_v2 mdp.RandomizedCameraDepth order: shift -> noise -> dropout.
+    // Noise is applied to every pixel in metres (training: normalized
+    // units), a no-return pixel can therefore read a few mm; dropout maps
+    // pixels to 0 = no return.
+    void randomize(double t)
+    {
+        const int W = cfg_.width, H = cfg_.height;
+        if (cfg_.shift_px > 0) {
+            if (!shift_drawn_ || (cfg_.shift_redraw_s > 0 && t - shift_draw_time_ >= cfg_.shift_redraw_s)) {
+                std::uniform_int_distribution<int> u(-cfg_.shift_px, cfg_.shift_px);
+                shift_dy_ = u(rng_);
+                shift_dx_ = u(rng_);
+                shift_drawn_ = true;
+                shift_draw_time_ = t;
+            }
+            if (shift_dy_ != 0 || shift_dx_ != 0) {
+                shifted_.resize(depth_mm_.size());
+                for (int r = 0; r < H; r++) {
+                    const int sr = std::clamp(r + shift_dy_, 0, H - 1);
+                    for (int c = 0; c < W; c++) {
+                        const int sc = std::clamp(c + shift_dx_, 0, W - 1);
+                        shifted_[static_cast<size_t>(r) * W + c] = depth_mm_[static_cast<size_t>(sr) * W + sc];
+                    }
+                }
+                depth_mm_.swap(shifted_);
+            }
+        }
+        if (cfg_.noise_std_m > 0.0) {
+            std::normal_distribution<double> n(0.0, cfg_.noise_std_m * 1000.0);
+            for (auto& v : depth_mm_) {
+                const double x = std::round(v + n(rng_));
+                v = static_cast<uint16_t>(std::clamp(x, 0.0, 65535.0));
+            }
+        }
+        if (cfg_.dropout_p > 0.0) {
+            std::bernoulli_distribution drop(cfg_.dropout_p);
+            for (auto& v : depth_mm_) {
+                if (drop(rng_)) v = 0;
+            }
         }
     }
 
@@ -419,6 +481,13 @@ private:
 
     int tap_fd_ = -1;
     sockaddr_in tap_addr_{};
+
+    bool randomize_ = false;
+    std::mt19937 rng_;
+    bool shift_drawn_ = false;
+    int shift_dy_ = 0, shift_dx_ = 0;
+    double shift_draw_time_ = 0.0;
+    std::vector<uint16_t> shifted_;
 
     std::unique_ptr<Pub_t> pub_;
     std::atomic<bool> running_{false};

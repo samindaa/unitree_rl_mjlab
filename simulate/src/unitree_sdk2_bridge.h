@@ -14,6 +14,7 @@
 #include "msgs/stream_msgs.h"
 
 #include <iostream>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -344,6 +345,15 @@ public:
                 odom_pub_ = std::make_unique<OdomPub_t>(param::config.odom_topic);
                 std::cout << "odom: " << param::config.odom_topic << " <- site '" << param::config.odom_site
                           << "' at " << 1000 / param::config.odom_divider << " Hz" << std::endl;
+                const auto& r = param::config.odom_randomize;
+                odom_randomize_ = r.pos_bias_m > 0 || r.vel_bias > 0 || r.pos_noise_m > 0 || r.vel_noise > 0;
+                if (odom_randomize_) {
+                    odom_rng_.seed(r.seed != 0 ? r.seed : std::random_device{}());
+                    std::cout << "odom: RANDOMIZATION ON: pos bias +-" << r.pos_bias_m << " m, vel bias +-" << r.vel_bias
+                              << " m/s, pos noise " << r.pos_noise_m << " m, vel noise " << r.vel_noise << " m/s"
+                              << (r.bias_redraw_s > 0 ? " (bias redrawn every " + std::to_string(r.bias_redraw_s) + " s)" : "")
+                              << std::endl;
+                }
             }
         }
     }
@@ -516,7 +526,41 @@ public:
             s.ang_vel_b[i] = vel[i];
             s.lin_vel_b[i] = vel[3 + i];
         }
+        if (odom_randomize_) randomize_odom(s);
         unitree_rl::msgs::write_odom(odom_pub_->msg_, s);
         odom_pub_->unlockAndPublish();
+    }
+
+    // smp_v2 UmtResidualAction estimator noise: x + bias + N(0, noise), bias
+    // ~ U[-bound, bound] per axis per episode. Position perturbation in the
+    // site (pelvis) frame, rotated into the world pose; velocity in the site
+    // frame directly (that is the frame the UMT reads them in).
+    bool odom_randomize_ = false;
+    std::mt19937 odom_rng_;
+    bool odom_bias_drawn_ = false;
+    double odom_bias_time_ = 0.0;
+    double odom_pos_bias_[3] = {0, 0, 0};
+    double odom_vel_bias_[3] = {0, 0, 0};
+
+    void randomize_odom(unitree_rl::msgs::OdomSample& s)
+    {
+        const auto& r = param::config.odom_randomize;
+        if (!odom_bias_drawn_ || (r.bias_redraw_s > 0 && s.t - odom_bias_time_ >= r.bias_redraw_s)) {
+            std::uniform_real_distribution<double> u(-1.0, 1.0);
+            for (int i = 0; i < 3; i++) {
+                odom_pos_bias_[i] = u(odom_rng_) * r.pos_bias_m;
+                odom_vel_bias_[i] = u(odom_rng_) * r.vel_bias;
+            }
+            odom_bias_drawn_ = true;
+            odom_bias_time_ = s.t;
+        }
+        std::normal_distribution<double> np(0.0, r.pos_noise_m), nv(0.0, r.vel_noise);
+        mjtNum d_site[3], d_world[3];
+        for (int i = 0; i < 3; i++) {
+            d_site[i] = odom_pos_bias_[i] + (r.pos_noise_m > 0 ? np(odom_rng_) : 0.0);
+            s.lin_vel_b[i] += odom_vel_bias_[i] + (r.vel_noise > 0 ? nv(odom_rng_) : 0.0);
+        }
+        mju_rotVecQuat(d_world, d_site, s.quat);  // (w, x, y, z)
+        for (int i = 0; i < 3; i++) s.pos[i] += d_world[i];
     }
 };

@@ -4,6 +4,7 @@
 #include "FSM/State_RLBase.h"
 #include "State_UmtMimic.h"
 #include "State_HiphiStudent.h"
+#include "State_HiphiEase.h"
 #include "Dex3Hands.h"
 #include "sources/odom_source.h"
 #include "sources/depth_source.h"
@@ -88,7 +89,7 @@ int main(int argc, char** argv)
 
     std::cout << "Press [L2 + Up] to enter FixStand mode.\n";
     std::cout << "And then press [R2 + A] to start controlling the robot.\n";
-    std::cout << "And then press [R1 + A] to start the UMT motion, [R1 + B] the hiphi student.\n";
+    std::cout << "And then press [R1 + A] to start the UMT motion, [R1 + B] the hiphi student (eased in, held at the end).\n";
 
     while (true)
     {
