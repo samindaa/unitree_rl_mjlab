@@ -35,6 +35,25 @@ sources:
       height: 60
       timeout_ms: 200
 
+# Motion clip library (MotionLibrary.h): all clips are loaded at start; Umt
+# and the hiphi stack play the CURRENT one (re-read on every entry into
+# Umt / HiphiEaseIn), so a clip can be picked at run time from the viser
+# mirror's "Motion clip" dropdown or with
+#   echo -n "clip 2" | nc -u -w0 127.0.0.1 9873      (index or file stem; also next / prev / list)
+# Clips are deploy npz files from scripts/umt_bundle_to_deploy_npz.py (43-joint
+# entity order, embedded layout). Remove this block to fall back to each
+# state's own motion_file.
+motions:
+  files:
+    - config/policy/umt/v0/params/umt_deploy_1282_27_pre1s_post1s.npz   # 0: UMT bundle clip (Dex3 entity)
+    - config/policy/hiphi_student/v0/params/pnp64_9204_13_1520609083.npz  # 1: pnp64 clip (hiphi stack)
+    - config/motions/20260808_140814.npz                                  # 2: pc2 test motion (bare G1, fingers zero)
+    - config/motions/20260808_140838.npz                                  # 3: pc2 test motion
+  dir: config/motions/pnp64      # + the 16 pnp64 v2 scenes converted by scripts/convert_pnp64_clips.sh (deploy format), sorted by name
+  default: 0
+  command_port: 9873
+  bind: 127.0.0.1            # 0.0.0.0 to accept the viser mirror from another host (robot)
+
 FSM:
   _: # enabled fsms
     Passive:
@@ -128,14 +147,14 @@ FSM:
     #   scripts/umt_bundle_to_deploy_npz.py <bundle.zip> <clip_name> <out.npz>
     # (cnpy-safe: numeric arrays only, uncompressed).
     motion_file: config/policy/umt/v0/params/umt_deploy_1282_27_pre1s_post1s.npz
-    policy_dir: config/policy/umt/v2/
+    policy_dir: config/policy/umt/vdcm/   # 291827423 hiphi_umt_nose_dcm 18500 (2026-09-22); v2 = 287265686 52000
     time_start: 0.0
     time_end: 1000.0
     end_state: Velocity
     # Sim2sim latency-injection experiment (leg-shuffle diagnosis): apply
     # motor commands this many ms late. 0 = off. Sweep 5/10/20/40 in
     # unitree_mujoco to find where foot-plant degrades; KEEP 0 ON THE ROBOT.
-    action_delay_ms: 15.0
+    action_delay_ms: 0.0
 
     # Clip layout (defaults match the G1+Dex3 entity: 43 joints / 46 bodies).
     # Uncomment to override for a clip with a different body/joint ordering.

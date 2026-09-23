@@ -28,7 +28,10 @@ actions:
 # (must equal the ONNX input width).
 observations:
   zest_ref:              # 55: z, roll, pitch, v_b(3), w_b(3), g_b(3), q_ref(43)
-    params: {command_name: motion}
+    # mask_hand_ref: the UMT trained on bundles with fingers frozen at 0; a
+    # clip with finger motion (pnp64) must not leak it into zest_ref (the
+    # hands still follow the clip through Dex3Hands).
+    params: {command_name: motion, mask_hand_ref: true}
     clip: null
     scale: null
     history_length: 1

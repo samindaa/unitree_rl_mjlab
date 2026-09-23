@@ -13,7 +13,7 @@ bundle manifest so they can be checked against ``config/config.yaml``.
 
 Usage:
     umt_bundle_to_deploy_npz.py BUNDLE.zip CLIP_NAME OUT.npz
-    umt_bundle_to_deploy_npz.py CLIP.npz OUT.npz              # single mjlab-format clip
+    umt_bundle_to_deploy_npz.py CLIP.npz OUT.npz              # single mjlab-format clip (any joint subset; mapped to the 43-joint entity, layout_* embedded)
     umt_bundle_to_deploy_npz.py BUNDLE.zip --list
     umt_bundle_to_deploy_npz.py --onnx policy.onnx   # make batch dim static (in place)
 """
@@ -62,6 +62,74 @@ def fix_onnx_static_batch(path: str) -> None:
         dims = [d.dim_value for d in v.type.tensor_type.shape.dim]
         print(f"[onnx]   {v.name}: {dims}")
 
+# G1 + Dex3-1 entity joint order (mjlab; the deploy clip layout): body joints
+# 0-21 and 29-35, fingers 22-28 (left) and 36-42 (right).
+ENTITY_JOINT_NAMES = [
+    "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint", "left_knee_joint",
+    "left_ankle_pitch_joint", "left_ankle_roll_joint", "right_hip_pitch_joint", "right_hip_roll_joint",
+    "right_hip_yaw_joint", "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+    "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint", "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_joint", "left_wrist_roll_joint",
+    "left_wrist_pitch_joint", "left_wrist_yaw_joint", "left_hand_thumb_0_joint", "left_hand_thumb_1_joint",
+    "left_hand_thumb_2_joint", "left_hand_middle_0_joint", "left_hand_middle_1_joint", "left_hand_index_0_joint",
+    "left_hand_index_1_joint", "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+    "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+    "right_hand_thumb_0_joint", "right_hand_thumb_1_joint", "right_hand_thumb_2_joint", "right_hand_middle_0_joint",
+    "right_hand_middle_1_joint", "right_hand_index_0_joint", "right_hand_index_1_joint",
+]
+
+
+def convert_single_clip(src: str, out: str | None, ap: argparse.ArgumentParser) -> int:
+    """One mjlab-format clip (any joint subset with ``joint_names``, e.g. a
+    29-joint bare-G1 retarget or a 43-joint pnp64 clip) -> deploy npz in the
+    43-joint entity order, missing joints (fingers) zero-padded, body arrays
+    kept as-is, plus ``layout_*`` int32 arrays naming the pelvis / torso_link
+    body indices and the body / hand joint ids so the deploy loader needs no
+    per-clip config. Numeric-only and uncompressed (cnpy)."""
+    if not out:
+        ap.error("out .npz is required")
+    with np.load(src, allow_pickle=True) as data:
+        arrays = {}
+        for k in NUMERIC_KEYS:
+            if k not in data.files:
+                if k == "fps":
+                    arrays[k] = np.array([50.0], dtype=np.float32)
+                    continue
+                print(f"error: clip is missing {k!r}", file=sys.stderr)
+                return 1
+            arrays[k] = np.ascontiguousarray(data[k], dtype=np.float32).reshape(-1) if k == "fps" else np.ascontiguousarray(data[k], dtype=np.float32)
+        names = [str(n) for n in data["joint_names"]] if "joint_names" in data.files else []
+        bodies = [str(n) for n in data["body_names"]] if "body_names" in data.files else []
+    if names and names != ENTITY_JOINT_NAMES:
+        missing = [n for n in ENTITY_JOINT_NAMES if n not in names]
+        extra = [n for n in names if n not in ENTITY_JOINT_NAMES]
+        if extra:
+            print(f"error: clip has joints outside the G1+Dex3 entity: {extra}", file=sys.stderr)
+            return 1
+        T = arrays["joint_pos"].shape[0]
+        for k in ("joint_pos", "joint_vel"):
+            full = np.zeros((T, len(ENTITY_JOINT_NAMES)), dtype=np.float32)
+            for j, n in enumerate(ENTITY_JOINT_NAMES):
+                if n in names:
+                    full[:, j] = arrays[k][:, names.index(n)]
+            arrays[k] = full
+        print(f"mapped {len(names)} joints into the 43-joint entity order; zero-padded: {missing}")
+    body_joint_ids = [i for i, n in enumerate(ENTITY_JOINT_NAMES) if re.fullmatch(BODY_JOINT_REGEX, n)]
+    hand_joint_ids = [i for i in range(len(ENTITY_JOINT_NAMES)) if i not in body_joint_ids]
+    arrays["layout_body_joint_ids"] = np.array(body_joint_ids, dtype=np.int32)
+    arrays["layout_hand_joint_ids"] = np.array(hand_joint_ids, dtype=np.int32)
+    if bodies:
+        if "pelvis" not in bodies or "torso_link" not in bodies:
+            print(f"error: body_names lacks pelvis / torso_link: {bodies}", file=sys.stderr)
+            return 1
+        arrays["layout_root_body_index"] = np.array([bodies.index("pelvis")], dtype=np.int32)
+        arrays["layout_anchor_body_index"] = np.array([bodies.index("torso_link")], dtype=np.int32)
+    np.savez(out, **arrays)  # NOT savez_compressed: cnpy needs stored entries
+    print(f"wrote {out}")
+    for k, v in arrays.items():
+        print(f"  {k:24s} {v.shape} {v.dtype}" + (f" = {v.tolist()}" if k.startswith("layout_root") or k.startswith("layout_anchor") else ""))
+    return 0
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -81,36 +149,7 @@ def main() -> int:
         ap.error("bundle is required unless only --onnx is given")
 
     if args.bundle.endswith(".npz"):
-        # A single mjlab-format clip (e.g. one of the hiphi pnp64 bundle
-        # clips in /tmp/smp_motion_bundles/...): same numeric arrays, plus
-        # object / cws / name arrays that cnpy cannot read — dropped.
-        out = args.clip if args.clip and args.clip.endswith(".npz") else args.out
-        if not out:
-            ap.error("out .npz is required")
-        with np.load(args.bundle, allow_pickle=True) as data:
-            arrays = {}
-            for k in NUMERIC_KEYS:
-                if k not in data.files:
-                    if k == "fps":
-                        arrays[k] = np.array([50.0], dtype=np.float32)
-                        continue
-                    print(f"error: clip is missing {k!r}", file=sys.stderr)
-                    return 1
-                arrays[k] = np.ascontiguousarray(data[k], dtype=np.float32)
-            names = [str(n) for n in data["joint_names"]] if "joint_names" in data.files else []
-            bodies = [str(n) for n in data["body_names"]] if "body_names" in data.files else []
-        np.savez(out, **arrays)
-        print(f"wrote {out}")
-        for k, v in arrays.items():
-            print(f"  {k:15s} {v.shape} {v.dtype}")
-        if names and bodies:
-            body_joint_ids = [i for i, n in enumerate(names) if re.fullmatch(BODY_JOINT_REGEX, n)]
-            print("\nlayout:")
-            print(f"  root_body_index:   {bodies.index('pelvis')}  # pelvis")
-            print(f"  anchor_body_index: {bodies.index('torso_link')}  # torso_link")
-            print(f"  body_joint_ids:    {body_joint_ids}")
-            print(f"  hand_joint_ids:    {[i for i in range(len(names)) if i not in body_joint_ids]}")
-        return 0
+        return convert_single_clip(args.bundle, args.clip if args.clip and args.clip.endswith(".npz") else args.out, ap)
 
     with zipfile.ZipFile(args.bundle) as zf:
         manifest = json.loads(zf.read("manifest.json"))

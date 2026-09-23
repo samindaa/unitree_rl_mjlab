@@ -64,6 +64,10 @@ class MirrorConfig:
   """Port for the viser web server."""
   fps: float = 30.0
   """Render update rate pushed to the browser."""
+  controller_host: str = "127.0.0.1"
+  """Host running g1_dex3_ctrl (its motion-library command port)."""
+  controller_port: int = 9873
+  """`motions.command_port` in the controller's config.yaml; 0 disables the clip panel."""
 
 
 class TapReceiver:
@@ -139,6 +143,45 @@ def depth_to_rgb(frame_mm: np.ndarray, upscale: int = 6) -> np.ndarray:
   rgb = np.stack([grey, grey, grey], axis=-1)
   rgb[frame_mm == 0] = (200, 30, 30)
   return np.repeat(np.repeat(rgb, upscale, axis=0), upscale, axis=1)
+
+
+class MotionClipClient:
+  """Talks to the controller's MotionLibrary command port (MotionLibrary.h):
+  sends `clip <stem>` / `next` / `prev` / `list`; every command is answered
+  with "current <index> <stem>\n<stem>...". Polled on a background thread."""
+
+  def __init__(self, host: str, port: int):
+    self.lock = Lock()
+    self.names: list[str] = []
+    self.current = -1
+    self.alive = False
+    self._addr = (host, port)
+    self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    self._sock.settimeout(0.5)
+    Thread(target=self._poll, daemon=True).start()
+
+  def send(self, cmd: str) -> None:
+    try:
+      self._sock.sendto(cmd.encode(), self._addr)
+      self._parse(self._sock.recv(65536))
+    except OSError:
+      with self.lock:
+        self.alive = False
+
+  def _parse(self, packet: bytes) -> None:
+    lines = packet.decode(errors="replace").splitlines()
+    if not lines or not lines[0].startswith("current "):
+      return
+    head = lines[0].split(" ", 2)
+    with self.lock:
+      self.current = int(head[1])
+      self.names = [n for n in lines[1:] if n]
+      self.alive = True
+
+  def _poll(self) -> None:
+    while True:
+      self.send("list")
+      time.sleep(2.0)
 
 
 class CommandSender:
@@ -227,6 +270,18 @@ def main(cfg: MirrorConfig) -> None:
     depth_md = server.gui.add_markdown("waiting for depth tap ...")
   build_command_gui(server, commands, sim_cfg)
 
+  clips = MotionClipClient(cfg.controller_host, cfg.controller_port) if cfg.controller_port > 0 else None
+  clip_dropdown = clip_md = None
+  if clips is not None:
+    with server.gui.add_folder("Motion clip (controller)"):
+      clip_md = server.gui.add_markdown("waiting for g1_dex3_ctrl ...")
+      clip_dropdown = server.gui.add_dropdown("clip", options=("-",), initial_value="-")
+      clip_dropdown.on_update(lambda _: clips.send(f"clip {clip_dropdown.value}") if clip_dropdown.value != "-" else None)
+      step = server.gui.add_button_group("step", ("◀ prev", "next ▶"))
+      step.on_click(lambda _: clips.send("prev" if step.value.endswith("prev") else "next"))
+  shown_names: list[str] = []
+  shown_current = -1
+
   # Show the default pose until the first packet arrives.
   mujoco.mj_forward(model, data)
   scene.update_from_mjdata(data)
@@ -255,6 +310,20 @@ def main(cfg: MirrorConfig) -> None:
       data.qpos[:] = qpos
       mujoco.mj_forward(model, data)
       scene.update_from_mjdata(data)
+
+    if clips is not None:
+      with clips.lock:
+        names, current, alive = list(clips.names), clips.current, clips.alive
+      if alive and names and (names != shown_names or current != shown_current):
+        if names != shown_names:
+          clip_dropdown.options = tuple(names)
+        if 0 <= current < len(names) and clip_dropdown.value != names[current]:
+          clip_dropdown.value = names[current]
+        clip_md.content = f"current: **[{current}] {names[current] if 0 <= current < len(names) else '?'}** — applies on the next entry into Umt / HiphiEaseIn"
+        shown_names, shown_current = names, current
+      elif not alive and shown_current != -2:
+        clip_md.content = f"waiting for g1_dex3_ctrl on udp://{cfg.controller_host}:{cfg.controller_port} ..."
+        shown_current = -2
 
     now = time.monotonic()
     if now - last_stats_time >= 1.0:

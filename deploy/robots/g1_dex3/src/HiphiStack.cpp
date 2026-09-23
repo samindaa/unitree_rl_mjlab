@@ -1,6 +1,7 @@
 #include "HiphiStack.h"
 #include <cmath>
 #include <ctime>
+#include "MotionLibrary.h"
 #include "UmtAnchor.h"
 #include "unitree_articulation.h"
 #include "sources/depth_source.h"
@@ -296,6 +297,18 @@ void HiphiStack::start(Phase phase, bool continue_sequence, const EaseConfig& ea
 
     if (!continue_sequence) {
         probe_dump();
+        if (!motion_library().empty()) {
+            auto picked = motion_library().current();
+            if (picked->num_joints != static_cast<int>(limit_lo_.size())) {
+                spdlog::error("HiphiStack: clip '{}' has {} joints, stack expects {}; keeping the previous clip",
+                              motion_library().current_name(), picked->num_joints, limit_lo_.size());
+            } else {
+                clip_ = picked;
+                time_range_[0] = cfg_["time_start"] ? std::clamp(cfg_["time_start"].as<float>(), 0.0f, clip_->duration) : 0.0f;
+                time_range_[1] = cfg_["time_end"] ? std::clamp(cfg_["time_end"].as<float>(), 0.0f, clip_->duration) : clip_->duration;
+                spdlog::info("HiphiStack: playing clip '{}' ({:.2f} s, {} frames)", motion_library().current_name(), clip_->duration, clip_->num_frames);
+            }
+        }
         clip_->update(time_range_[0]);
         umt::align_clip_to_robot(umt_env_.get(), clip_->anchor_quaternion(), clip_->anchor_position(), align_z_);
         umt_env_->reset();

@@ -8,6 +8,7 @@
 #include "Dex3Hands.h"
 #include "sources/odom_source.h"
 #include "sources/depth_source.h"
+#include "MotionLibrary.h"
 
 std::unique_ptr<LowCmd_t> FSMState::lowcmd = nullptr;
 std::shared_ptr<LowState_t> FSMState::lowstate = nullptr;
@@ -82,6 +83,7 @@ int main(int argc, char** argv)
 
     dex3_hands().start(param::config["dex3"]);
     init_sources(param::config["sources"]);
+    motion_library().start(param::config["motions"], State_UmtMimic::MotionLoader_::Layout());
 
     // Initialize FSM
     auto fsm = std::make_unique<CtrlFSM>(param::config["FSM"]);

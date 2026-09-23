@@ -42,9 +42,26 @@ def pelvis_z():
     except BlockingIOError: pass
     tap.setblocking(True); pkt = tap.recv(65536)
     return struct.unpack_from("<d", pkt, 16 + 2 * 8)[0]
-key("1"); time.sleep(3.0); key("2"); time.sleep(2.0)
-for _ in range(5): key("8"); time.sleep(0.4)   # lower the elastic band 0.5 m
-time.sleep(1.0); print(f"pelvis z before release {pelvis_z():.3f}"); key("9"); time.sleep(2.5); print(f"pelvis z in Velocity after release {pelvis_z():.3f}")
+CLIP = os.environ.get("E2E_CLIP", "pnp64_9204_13_1520609083")   # motion-library stem/index to play (config.yaml motions:)
+for attempt in range(3):
+    if attempt:
+        print("  harness: robot went down during the band release, restarting")
+        subprocess.run(["pkill", "-x", "g1_dex3_ctrl"]); subprocess.run(["pkill", "-x", "unitree_mujoco"]); time.sleep(0.5)
+        start("./unitree_mujoco", f"{REPO}/simulate/build", f"{S}/e2e2_sim.log"); time.sleep(5)
+        start("./g1_dex3_ctrl --network lo", f"{REPO}/deploy/robots/g1_dex3/build", f"{S}/e2e2_ctrl.log")
+        for _ in range(60):
+            time.sleep(0.5)
+            if "Connected to robot" in open(f"{S}/e2e2_ctrl.log", errors="ignore").read(): break
+        time.sleep(1.0)
+    key("1"); time.sleep(3.0); key("2"); time.sleep(2.0)
+    for _ in range(5): key("8"); time.sleep(0.4)   # lower the elastic band 0.5 m
+    time.sleep(1.0); print(f"pelvis z before release {pelvis_z():.3f}"); key("9"); time.sleep(2.5); z = pelvis_z(); print(f"pelvis z in Velocity after release {z:.3f}")
+    if z > 0.6: break
+lib = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); lib.settimeout(1.0)
+try:
+    lib.sendto(f"clip {CLIP}".encode(), ("127.0.0.1", 9873)); print("motion library:", lib.recv(4096).decode().splitlines()[0])
+except OSError:
+    print("motion library: no command port (using the state's motion_file)")
 key("4"); time.sleep(float(sys.argv[1]) if len(sys.argv) > 1 else 16.0); print(f"pelvis z at end of student phase {pelvis_z():.3f}"); key("0"); time.sleep(1.5)
 subprocess.run(["pkill", "-x", "g1_dex3_ctrl"]); subprocess.run(["pkill", "-x", "unitree_mujoco"]); time.sleep(0.5)
 log = open(f"{S}/e2e2_ctrl.log", errors="ignore").read().replace("\r", "")

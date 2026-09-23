@@ -85,7 +85,8 @@ cd ~/third_party/smp_v2 && uv run scripts/rollout_hiphi_student.py \
 **Stream diagnostics**:
 
 ```bash
-uv run python scripts/sim_viser_mirror.py     # browser viewer: robot + a live panel of the depth frames the controller receives
+uv run python scripts/sim_viser_mirror.py     # browser viewer: robot, live depth panel, motion-clip dropdown for the controller
+echo -n "clip 20260808_140814" | nc -u -w0 127.0.0.1 9873   # pick a clip without the viewer (index or stem; next/prev/list)
 deploy/robots/g1_dex3/build/topic_probe -n lo -s 5 -d /tmp/probe.npz      # rates / ages while the sim runs
 uv run python scripts/check_depth_stream.py --probe-npz /tmp/probe.npz
 # pixel-level check: set depth_camera.dump_dir/dump_every in simulate/config.yaml, run the sim, then
@@ -141,6 +142,32 @@ Hand/body contacts are disabled as in training (collision bitmasks); hand/hand
 and hand/floor contacts stay. Fingers go limp 1 s after the last command.
 Unitree's `g1_dex3_example` from `unitree_sdk2` drives the simulated hands
 unchanged, which is the quickest bridge check.
+
+## Motion clip library
+
+All clips listed under `motions:` in [`config/config.yaml`](config/config.yaml)
+([`include/MotionLibrary.h`](include/MotionLibrary.h)) are loaded at start;
+`Umt` and the hiphi stack play the **current** one, re-read on every entry
+into `Umt` / `HiphiEaseIn`, so a clip can be picked at run time without a
+restart:
+
+- viser: `uv run python scripts/sim_viser_mirror.py` → "Motion clip
+  (controller)" dropdown + prev/next (talks to the controller's UDP command
+  port, `--controller-host` for a robot);
+- shell: `echo -n "clip 2" | nc -u -w0 127.0.0.1 9873` (index or file stem;
+  also `next`, `prev`, `list` — every command is answered with the list and
+  the current index).
+
+Clips are deploy npz files from `scripts/umt_bundle_to_deploy_npz.py`; its
+single-clip mode maps any joint subset by name into the 43-joint entity order
+(a 29-joint bare-G1 retarget gets zero fingers) and embeds the pelvis /
+torso body indices, so clips with different body lists coexist
+(`config/motions/` holds the pc2 test motions; `config/motions/pnp64/` the
+16 single-object pnp64 v2 scenes from `scripts/convert_pnp64_clips.sh`,
+listed through `motions.dir`). The selection is global: the
+hiphi stack plays the current clip too (the e2e script selects the pnp64
+clip itself). Remove the `motions:` block to fall back to each state's own
+`motion_file`.
 
 ## Streamed inputs: state estimate and depth camera
 

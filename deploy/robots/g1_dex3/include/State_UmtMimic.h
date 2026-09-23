@@ -154,6 +154,25 @@ public:
             return it->second;
         };
 
+        // Layout embedded by scripts/umt_bundle_to_deploy_npz.py (root / anchor
+        // body index, body / hand joint ids) overrides the configured one, so
+        // clips with a different body list (bare G1: 30 bodies) load as-is.
+        auto read_ints = [&](const char* key, std::vector<int>& out) {
+            auto it = npz_data.find(key);
+            if (it == npz_data.end()) return false;
+            auto& a = it->second;
+            out.clear();
+            for (size_t i = 0; i < a.num_vals; ++i) {
+                out.push_back(a.word_size == 8 ? static_cast<int>(a.data<int64_t>()[i]) : a.data<int32_t>()[i]);
+            }
+            return true;
+        };
+        std::vector<int> ids;
+        if (read_ints("layout_root_body_index", ids) && !ids.empty()) layout_.root_body_index = ids[0];
+        if (read_ints("layout_anchor_body_index", ids) && !ids.empty()) layout_.anchor_body_index = ids[0];
+        if (read_ints("layout_body_joint_ids", ids) && !ids.empty()) layout_.body_joint_ids = ids;
+        if (read_ints("layout_hand_joint_ids", ids)) layout_.hand_joint_ids = ids;
+
         auto& body_pos_w     = require("body_pos_w");     // [frame, body, 3]
         auto& body_quat_w    = require("body_quat_w");    // [frame, body, 4]
         auto& body_lin_vel_w = require("body_lin_vel_w"); // [frame, body, 3]

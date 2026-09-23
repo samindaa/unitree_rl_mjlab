@@ -118,3 +118,36 @@ passes — both sides are equally wrong.
 **Lesson.** The export script cannot detect activation or `mean_clip_scale` from the
 checkpoint; record them with the run (or read them from the run's saved agent cfg) rather
 than trusting the defaults.
+
+## Issue 4: robot falls within 1 s when `Umt` plays a clip with finger motion (2026-09-22)
+
+**Symptom.** `Umt` (plain UMT tracking) with `pnp64_9204_13_1520609083` selected from the
+motion library: pelvis at 0.18 m after one second, tracking error 0.34 rad. The same clip
+through the hiphi stack, and any finger-less clip (UMT bundle clips, pc2 test motions) in
+`Umt`, track fine. The clip itself is structurally sound (finite, unit quaternions, ≤0.12
+rad/frame, feet on the ground).
+
+**Root cause.** The UMT policies were trained on bundles whose 14 finger joints are frozen at
+0, but `zest_ref` carries the reference of ALL 43 joints. `umt/*/params/deploy.yaml` fed the
+clip's finger references unmasked: the pnp64 clip moves the fingers by up to 1.57 rad, so 14
+of the 55 `zest_ref` dims were far out of the training distribution and the policy output
+went wrong from the first step. `hiphi_umt_base` had `mask_hand_ref: true` all along (it
+mirrors `UmtResidualActionCfg.mask_hand_ref`), which is why the hiphi stack never showed it.
+
+**Fix.** `zest_ref: params: {command_name: motion, mask_hand_ref: true}` in every
+`umt/*/params/deploy.yaml`. What the mask does, precisely (`State_UmtMimic.cpp`,
+`REGISTER_OBSERVATION(zest_ref)`): every policy step, after the clip frame is read, the 14
+finger entries of the 43-joint reference vector inside `zest_ref` (entity ids 22-28 and
+36-42) are **overwritten with the default finger pose** — `hand_default_pos` if given,
+otherwise all zeros, i.e. the hands' qpos0, the pose the UMT bundles kept the fingers frozen
+at — before the vector is handed to the network. The clip's finger values are never part of
+the policy's conditioning. They are still used, on a separate path: `State_UmtMimic::run()`
+sends `motion->hand_joint_pos()` (the clip's fingers) to the Dex3 hands through
+`Dex3Hands`, so the fingers physically follow the clip while the policy is conditioned as if
+they were at rest — the same contract as training's `UmtResidualActionCfg.mask_hand_ref`
+(the finger joints are not part of the UMT's proprioception either: `joint_pos_rel` /
+`joint_vel_rel` are the 29 body joints). Result on the same clip: 0.068 rad mean error,
+standing for the whole clip.
+
+**Lesson.** Any observation term that spans joints the policy never saw move must reproduce
+the training-time masking, not just the training-time width.

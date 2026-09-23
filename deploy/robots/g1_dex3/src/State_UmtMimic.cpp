@@ -1,6 +1,7 @@
 #include "State_UmtMimic.h"
 #include <ctime>
 #include "Dex3Hands.h"
+#include "MotionLibrary.h"
 #include "UmtAnchor.h"
 #include "unitree_articulation.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
@@ -176,10 +177,15 @@ State_UmtMimic::State_UmtMimic(int state_mode, std::string state_string)
     if (cfg["body_joint_ids"])    layout.body_joint_ids    = cfg["body_joint_ids"].as<std::vector<int>>();
     if (cfg["hand_joint_ids"])    layout.hand_joint_ids    = cfg["hand_joint_ids"].as<std::vector<int>>();
 
-    motion_ = std::make_shared<MotionLoader_>(motion_file.string(), layout);
-    spdlog::info("Loaded UMT motion '{}': {} frames @ {:.0f} fps ({:.2f}s), {} joints",
-                 motion_file.stem().string(), motion_->num_frames, 1.0f / motion_->dt,
-                 motion_->duration, motion_->num_joints);
+    if (!motion_library().empty()) {
+        motion_ = motion_library().current();  // re-picked on every enter()
+        spdlog::info("UMT motion from the motion library: '{}' (select with the viser dropdown / udp command port)", motion_library().current_name());
+    } else {
+        motion_ = std::make_shared<MotionLoader_>(motion_file.string(), layout);
+        spdlog::info("Loaded UMT motion '{}': {} frames @ {:.0f} fps ({:.2f}s), {} joints",
+                     motion_file.stem().string(), motion_->num_frames, 1.0f / motion_->dt,
+                     motion_->duration, motion_->num_joints);
+    }
     motion = motion_;
 
     if(cfg["time_start"]) {
@@ -240,6 +246,14 @@ State_UmtMimic::State_UmtMimic(int state_mode, std::string state_string)
 
 void State_UmtMimic::enter()
 {
+    if (!motion_library().empty()) {
+        // the clip selected since the last entry; time range re-clamped to it
+        motion_ = motion_library().current();
+        auto cfg = param::config["FSM"][getStateString()];
+        time_range_[0] = cfg["time_start"] ? std::clamp(cfg["time_start"].as<float>(), 0.0f, motion_->duration) : 0.0f;
+        time_range_[1] = cfg["time_end"] ? std::clamp(cfg["time_end"].as<float>(), 0.0f, motion_->duration) : motion_->duration;
+        spdlog::info("Umt: playing clip '{}' ({:.2f} s, {} frames)", motion_library().current_name(), motion_->duration, motion_->num_frames);
+    }
     // set gain
     for (int i = 0; i < env->robot->data.joint_stiffness.size(); i++)
     {
